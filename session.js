@@ -45,12 +45,14 @@ class Session {
     this.user = '';
     this.error = null; // last failure message; cleared on success / user disconnect
     this.since = Date.now();
+    this.onState = null; // (state) => void — the meter poller follows the link (S2)
   }
 
   _set(state, error) {
     this.state = state;
     if (error !== undefined) this.error = error;
     this.since = Date.now();
+    if (this.onState) this.onState(state);
   }
 
   status() {

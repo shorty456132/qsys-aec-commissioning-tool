@@ -6,6 +6,7 @@ const path = require('path');
 const { Session, SessionError } = require('./session');
 const { normalizeComponents, normalizeControls } = require('./discovery');
 const { ROLES, defaultRig, validateRig } = require('./roles');
+const { MeterPoller } = require('./meters');
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 8080;
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -80,15 +81,18 @@ function readJson(req) {
 
 // --- /api router -------------------------------------------------------------
 // All QRC traffic goes through `session.call` (ADR-03).
-function apiRoutes(session, rigPath) {
+function apiRoutes(session, rigPath, poller) {
   return {
     // S1 — chain setup persistence.
     'GET /api/rig': (req, res) => json(res, 200, loadRig(rigPath)),
     'PUT /api/rig': async (req, res) => {
       const rig = validateRig(await readJson(req));
       saveRig(rigPath, rig);
+      poller.setRig(rig); // S2 — the change group follows the rig
       json(res, 200, rig);
     },
+    // S2 — Monitor snapshot, short-polled by the UI (ADR-11).
+    'GET /api/monitor': (req, res) => json(res, 200, poller.snapshot()),
     'GET /api/ping': (req, res) => json(res, 200, { ok: true }),
     'GET /api/status': (req, res) => json(res, 200, session.status()),
     'POST /api/connect': async (req, res) => json(res, 200, await session.connect(await readJson(req))),
@@ -155,9 +159,15 @@ function serveStatic(req, res, urlPath) {
   });
 }
 
-function createApp({ qrcTimeoutMs, keepaliveMs, rigPath = DEFAULT_RIG_PATH } = {}) {
+function createApp({ qrcTimeoutMs, keepaliveMs, pollMs, rigPath = DEFAULT_RIG_PATH } = {}) {
   const session = new Session({ timeoutMs: qrcTimeoutMs, keepaliveMs });
-  const routes = apiRoutes(session, rigPath);
+  const poller = new MeterPoller({ session, intervalMs: pollMs });
+  try {
+    poller.setRig(loadRig(rigPath));
+  } catch (e) {
+    poller.setRigError(e.message); // GET /api/rig reports the same 500
+  }
+  const routes = apiRoutes(session, rigPath, poller);
   const params = paramRoutes(session);
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
@@ -181,6 +191,7 @@ function createApp({ qrcTimeoutMs, keepaliveMs, rigPath = DEFAULT_RIG_PATH } = {
     serveStatic(req, res, url.pathname);
   });
   server.session = session;
+  server.poller = poller;
   return server;
 }
 

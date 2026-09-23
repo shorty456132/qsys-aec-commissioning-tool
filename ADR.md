@@ -57,7 +57,9 @@ contract allows several chains; the UI starts with one.
 `QRC_Commands.md`). Poll returns **changes only** → the server keeps a value
 cache. Max **4** change groups per connection → we use one, rebuilt with
 `Clear` when the rig changes. Explicit Poll, not AutoPoll, so every
-response is matched by id.
+response is matched by id. CONFIRMED in emulation: the first Poll after
+`AddComponentControl` returns every added pin, so the cache fills without
+`Invalidate`. An unknown component → QRC error 7, shown in the snapshot.
 
 **ADR-12 — Advisor = pure function.** `advise(rig, values) → Finding[]`,
 server-side, unit-tested. Every finding carries its trigger value, the
@@ -131,9 +133,11 @@ Flex input — type `io_card_flex_in_core_8flex` (8 ch)
 ---
 
 ## Resume notes
-1. The v2 plan is in TASKS.md. S1 is done → next is **S2**. The contracts at the top
-   of TASKS are fixed; change them only by editing both files.
-2. `npm test` is 59 green after S1. Tests pass `rigPath` to `createApp` so they
-   never touch the repo's `rig.json`.
+1. The v2 plan is in TASKS.md. S1 + S2 are done → next is **S3** (S4–S9 also
+   only need S2). The contracts at the top of TASKS are fixed; change them only
+   by editing both files.
+2. `npm test` is 76 green after S2. Tests pass `rigPath` (and `pollMs: 30`) to
+   `createApp` so they never touch the repo's `rig.json`. A new metered role
+   only needs `roles.js` `meters()` — `meterList` + the poller pick it up.
 3. Emulation: `127.0.0.1:1710`, design = `200ms_Acoustic_Echo_Canceler` +
    `Flex_In_Core-1`. Server: `node server.js` (:8080; `PORT=` to override).

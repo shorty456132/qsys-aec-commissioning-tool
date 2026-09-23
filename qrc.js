@@ -201,6 +201,25 @@ class QRC {
     return this.sendCommand('Component.GetControls', { Name: name });
   }
 
+  // --- change groups (S2, ADR-11; shapes Verified: QRC_Commands.md) ----------
+
+  changeGroupAddComponentControl(id, name, pins) {
+    // {"Id", "Component": {"Name", "Controls": [{"Name": <pin>}]}} — creates the group if new
+    return this.sendCommand('ChangeGroup.AddComponentControl', {
+      Id: id,
+      Component: { Name: name, Controls: pins.map((p) => ({ Name: p })) },
+    });
+  }
+
+  changeGroupPoll(id) {
+    // → {Id, Changes: [{Component, Name, Value, String}]} — changes only
+    return this.sendCommand('ChangeGroup.Poll', { Id: id });
+  }
+
+  changeGroupClear(id) {
+    return this.sendCommand('ChangeGroup.Clear', { Id: id });
+  }
+
   /**
    * Set controls on a component. NO reply — timeout is normal.
    * @param {string} name component Code Name

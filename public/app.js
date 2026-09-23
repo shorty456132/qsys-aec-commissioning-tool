@@ -32,6 +32,7 @@
       $('tab-' + t).classList.toggle('on', t === name);
       $('view-' + t).classList.toggle('hidden', t !== name);
     }
+    if (name === 'monitor') startMonitor(); else stopMonitor();
   }
   $('tab-setup').onclick = () => showTab('setup');
   $('tab-monitor').onclick = () => showTab('monitor');
@@ -147,6 +148,63 @@
       $('rig-msg').innerHTML = '<span class="err">' + esc(e.message) + '</span>';
       $('rig-save').disabled = true; // never overwrite a rig.json we couldn't read
     }
+  }
+
+  // --- Monitor tab (S2): short-polls /api/monitor while visible (ADR-11) ----------
+  const MONITOR_MS = 500;
+  const LEVEL_COLORS = { ok: 'var(--green)', warn: 'var(--amber)', bad: 'var(--red)' };
+  let monTimer = null;
+
+  // Bar meter. `centred` bars grow from 0 in the middle (RMLR); others from lo.
+  // Values past the range are drawn pinned at the edge and flagged.
+  function renderMeter(card, m, centred) {
+    card.classList.toggle('stale', !m || m.stale);
+    const fill = card.querySelector('.fill');
+    if (!m || m.value === null) {
+      fill.style.width = '0';
+      card.querySelector('.val').textContent = '—';
+      return;
+    }
+    const span = m.hi - m.lo;
+    const clamped = Math.min(m.hi, Math.max(m.lo, m.value));
+    const pos = (clamped - m.lo) / span * 100;
+    const zero = centred ? (0 - m.lo) / span * 100 : 0;
+    fill.style.left = Math.min(pos, zero) + '%';
+    fill.style.width = Math.abs(pos - zero) + '%';
+    const out = centred && Math.abs(m.value) > 3;
+    fill.style.background = m.stale ? 'var(--gray)' : out ? 'var(--amber)' : 'var(--green)';
+    const pinned = m.value <= m.lo || m.value >= m.hi ? ' (pinned)' : '';
+    const v = (centred && m.value > 0 ? '+' : '') + m.value.toFixed(1) + ' ' + m.unit;
+    card.querySelector('.val').textContent = v + pinned + (m.stale ? ' · stale' : '');
+  }
+
+  function renderMonitor(s) {
+    const where = s.error ? ' <span class="err">(' + esc(s.error) + ')</span>' : '';
+    $('mon-status').innerHTML = '<i style="background:' + (COLORS[s.state] || COLORS.disconnected) + '"></i><span>' +
+      esc(s.state) + where + (s.meters.length ? '' : ' — no metered stage set; pick an AEC on the Setup tab') + '</span>';
+    const byKey = (k) => s.meters.find((m) => m.key === k);
+    renderMeter($('mon-rmlr'), byKey('aec.rmlr'), true);
+    renderMeter($('mon-erle'), byKey('aec.erle'), false);
+    $('mon-findings').innerHTML = s.findings.length
+      ? s.findings.map((f) => '<li><i style="background:' + (LEVEL_COLORS[f.level] || COLORS.disconnected) + '"></i><span>' +
+          esc(f.text) + '</span><span class="src">' + esc(f.source) + '</span></li>').join('')
+      : '<li><span class="csub">No findings — needs live meter values.</span></li>';
+  }
+
+  async function pollMonitor() {
+    try { renderMonitor(await api('GET', '/api/monitor')); }
+    catch (e) { renderMonitor({ state: 'disconnected', error: 'Tool server unreachable', meters: [], findings: [] }); }
+  }
+
+  function startMonitor() {
+    if (monTimer) return;
+    pollMonitor();
+    monTimer = setInterval(pollMonitor, MONITOR_MS);
+  }
+
+  function stopMonitor() {
+    clearInterval(monTimer);
+    monTimer = null;
   }
 
   loadRig().then(refreshStatus);

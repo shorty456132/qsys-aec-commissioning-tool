@@ -37,6 +37,22 @@ label.f{display:flex;flex-direction:column;gap:3px;font-size:11.5px;color:var(--
 .chk input{margin:0}
 .savebar{display:flex;gap:10px;align-items:center;margin:14px 0 0}
 .ok{color:var(--green)}.err{color:var(--red)}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
+.card{background:#1f2023;border:1px solid var(--edge);border-radius:8px;padding:12px}
+.ctitle{font-weight:500}
+.csub{font-size:11px;color:var(--mute);font-weight:400}
+.track{position:relative;height:16px;background:#111214;border-radius:3px;margin:12px 0 3px;overflow:hidden}
+.track .zone{position:absolute;top:0;bottom:0;left:35%;width:30%;background:rgba(63,191,95,.18)}
+.track .mid{position:absolute;top:0;bottom:0;left:50%;width:1px;background:var(--mute)}
+.track .fill{position:absolute;top:2px;bottom:2px;left:0;width:0;background:var(--gray)}
+.scale{display:flex;justify-content:space-between;font-size:10.5px;color:var(--mute)}
+.val{font-size:20px;margin:6px 0 0;font-variant-numeric:tabular-nums}
+.card.stale .val,.card.stale .fill{opacity:.35}
+.findings{list-style:none;margin:0;padding:0}
+.findings li{display:flex;gap:9px;align-items:baseline;padding:6px 0;border-top:1px solid var(--edge)}
+.findings li:first-child{border-top:none}
+.findings i{width:10px;height:10px;border-radius:50%;flex:none;transform:translateY(1px)}
+.findings .src{margin-left:auto;font-size:11px;color:var(--mute);white-space:nowrap}
 </style>
 </head>
 <body>
@@ -80,8 +96,30 @@ label.f{display:flex;flex-direction:column;gap:3px;font-size:11.5px;color:var(--
 
 <section id="view-monitor" class="hidden">
   <div class="panel">
-    <h2>Monitor</h2>
-    <p class="sub" style="margin:0">Live meters and findings arrive in S2.</p>
+    <h2>Meters</h2>
+    <div id="mon-status" class="connstatus" style="margin:0 0 12px"></div>
+    <div class="cards">
+      <div class="card" id="mon-rmlr">
+        <div class="ctitle">RMLR <span class="csub">ref ÷ mic, −10…+10 dB · target ±3</span></div>
+        <div class="track"><div class="zone"></div><div class="mid"></div><div class="fill"></div></div>
+        <div class="scale"><span>−10</span><span>0</span><span>+10</span></div>
+        <div class="val">—</div>
+      </div>
+      <div class="card" id="mon-erle">
+        <div class="ctitle">ERLE <span class="csub">echo return loss enhancement, 0…20 dB</span></div>
+        <div class="track"><div class="fill"></div></div>
+        <div class="scale"><span>0</span><span>10</span><span>20</span></div>
+        <div class="val">—</div>
+      </div>
+      <div class="card" id="mon-elr">
+        <div class="ctitle">ELR <span class="csub">echo level ratio (derived)</span></div>
+        <p class="csub" style="margin:10px 0 0">ELR needs a named output component — set the output stage (S5). ERLE is not ELR.</p>
+      </div>
+    </div>
+  </div>
+  <div class="panel">
+    <h2>Findings</h2>
+    <ul id="mon-findings" class="findings"></ul>
   </div>
 </section>
 

@@ -40,7 +40,8 @@ Role = { id, label, typeMatch: RegExp,         // dropdown filter; "show all" fa
          knobs(sel)  -> [{ key, pin, label, lo, hi }] }  // named in findings, never written
 
 // Monitor snapshot — GET /api/monitor, short-polled by the UI (ADR-11)
-Snapshot = { t, state, meters: [{ key, chain, role, component, pin, label,
+Snapshot = { t, state, error: string|null,       // poll/rebuild/rig error (S2)
+             meters: [{ key, chain, role, component, pin, label,
              value, string, unit, lo, hi, stale }], findings: [Finding] }
 
 // Finding — advisor.js, pure: advise(rig, meterValues) -> [Finding] (ADR-12)
@@ -53,27 +54,6 @@ Finding = { id, level: 'ok'|'warn'|'bad', text,
 ---
 
 ## To Do
-
-**S2 — Monitor tracer: AEC meters + first finding** *(needs S1)*
-`meters.js`: one change group (`ChangeGroup.AddComponentControl` for every
-meter pin in the rig) → `ChangeGroup.Poll` every 500 ms → a value cache,
-because Poll returns changes only. `GET /api/monitor` → Snapshot. The
-Monitor tab shows an RMLR bar meter (centred on 0, pins at ±10 dB), an ERLE
-meter (0…20), and an ELR card reading "needs a named output component"
-(ADR-07). First rule: RMLR outside ±3 dB → "Adjust Reference gain
-(`channel.N.ref.gain`)".
-Tests first:
-- the fake server gets `ChangeGroup.*` plus a scripted meter track; the poller
-  merges partial `Changes` into the cache
-- rig change → group rebuilt (`Clear`/re-add), with no second group leaked
-  (max 4, ADR-11)
-- `advise`: RMLR +5 → warn, trigger `{key, 5}`, adjust `ref.gain`,
-  `source: 'doc:AEC_Gain_Structure.md'`; RMLR 0 → ok
-- disconnect → poller stops; snapshot `state: 'disconnected'`, meters `stale`
-- a poll error → surfaced in the snapshot, never swallowed
-- `NEEDS-TEST:` RMLR sign convention (is +ve "ref hotter than mic"?) → S10
-Acceptance (emulation): meters render and read the static values; the
-poll runs without errors for more than 60 s (it doubles as the keepalive).
 
 **S3 — Input stage (Mic/Line, Flex, Dante in)** *(needs S2)*
 Role + dropdown + channel; input level meter + clip; rules: talker window
@@ -129,6 +109,12 @@ live ranges).
 - (none)
 
 ## Done
+- **S2 — Monitor tracer: AEC meters + first finding.** `meters.js`
+  (`meterList`, `MeterPoller`: one fixed-Id change group, `Clear` + re-add
+  on a rig change, 500 ms chained Poll, value cache), `advisor.js` (RMLR ±3
+  rule → adjust `channel.N.ref.gain`), `GET /api/monitor`, `session.onState`
+  starts/stops the poller. Monitor tab: RMLR/ERLE bars, ELR placeholder,
+  findings. Emulation acceptance passed (65 s, 0 errors, static values read).
 - **S1 — New shell + Setup tab with an AEC stage.** `roles.js` (AEC role,
   `defaultRig`, `validateRig`), `GET/PUT /api/rig` (atomic write; a corrupt
   file → 500, never silently reset), `GET /api/roles/:id/candidates[?all=1]`,
@@ -162,3 +148,8 @@ live ranges).
   (channel_count "1"). Meter keys are `aec.rmlr` / `aec.erle`, knob keys
   `aec.refGain|minRef|minMic` → S2 builds on these. The browser UI hasn't
   been clicked through by hand yet.
+- **2026-09-22 (S2):** done, `npm test` 76 green. CONFIRMED in emulation: the
+  first Poll after AddComponentControl returns every added pin; `Clear` +
+  re-add works; an unknown component → QRC error 7 (surfaced, retried each
+  tick). Snapshot gained `error` (contract updated). The Monitor UI hasn't
+  been clicked through by hand yet. `NEEDS-TEST:` RMLR sign → S10.

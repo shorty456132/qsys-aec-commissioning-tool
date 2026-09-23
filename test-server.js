@@ -35,20 +35,55 @@ const FAKE_CONTROLS = {
 
 // Fake QRC: EngineStatus broadcast on connect, replies to every request
 // unless `silent`. Tracks live sockets so tests can count / drop them.
-function fakeReply(msg) {
+//
+// S2 change groups (shapes: QRC_Commands.md). Groups live per connection:
+// Id → Map("component\0pin" → last value sent). `fake.meters[comp][pin]` is
+// the scripted meter track (ADR-13); Poll returns changes only, like a Core.
+function fakeReply(msg, fake, conn) {
+  const p = msg.params || {};
   if (msg.method === 'Component.GetComponents') return { result: FAKE_COMPONENTS };
   if (msg.method === 'Component.GetControls') {
-    const c = FAKE_CONTROLS[msg.params && msg.params.Name];
+    const c = FAKE_CONTROLS[p.Name];
     if (!c) return { error: { code: 8, message: 'Unknown component name' } };
-    return { result: { Name: msg.params.Name, Controls: c } };
+    return { result: { Name: p.Name, Controls: c } };
+  }
+  if (msg.method === 'ChangeGroup.AddComponentControl') {
+    fake.groupIds.add(p.Id);
+    if (!conn.groups.has(p.Id)) conn.groups.set(p.Id, new Map());
+    const g = conn.groups.get(p.Id);
+    for (const c of p.Component.Controls) {
+      const k = p.Component.Name + '\0' + c.Name;
+      if (!g.has(k)) g.set(k, undefined); // undefined = never sent → first Poll reports it
+    }
+    return { result: true };
+  }
+  if (msg.method === 'ChangeGroup.Clear') {
+    if (conn.groups.has(p.Id)) conn.groups.get(p.Id).clear();
+    return { result: true };
+  }
+  if (msg.method === 'ChangeGroup.Poll') {
+    if (fake.pollError) return { error: { code: 99, message: fake.pollError } };
+    const g = conn.groups.get(p.Id);
+    if (!g) return { error: { code: 6, message: 'Unknown change group' } };
+    const changes = [];
+    for (const [k, last] of g) {
+      const [comp, pin] = k.split('\0');
+      const v = (fake.meters[comp] || {})[pin];
+      if (v === undefined || v === last) continue;
+      g.set(k, v);
+      changes.push({ Component: comp, Name: pin, Value: v, String: `${v}dB` });
+    }
+    if (changes.length) fake.changeLog.push(changes);
+    return { result: { Id: p.Id, Changes: changes } };
   }
   return { result: true };
 }
 
 function startFakeQRC({ silent = false } = {}) {
-  const fake = { socks: new Set(), methods: [] };
+  const fake = { socks: new Set(), methods: [], meters: {}, groupIds: new Set(), changeLog: [], pollError: null };
   return new Promise((resolve) => {
     fake.srv = net.createServer((sock) => {
+      const conn = { groups: new Map() };
       fake.socks.add(sock);
       sock.on('close', () => fake.socks.delete(sock));
       sock.on('error', () => {});
@@ -62,7 +97,7 @@ function startFakeQRC({ silent = false } = {}) {
           const msg = JSON.parse(buf.slice(0, i));
           buf = buf.slice(i + 1);
           fake.methods.push(msg.method);
-          if (msg.id !== undefined && !fake.mute) sock.write(JSON.stringify({ jsonrpc: '2.0', ...fakeReply(msg), id: msg.id }) + '\x00');
+          if (msg.id !== undefined && !fake.mute) sock.write(JSON.stringify({ jsonrpc: '2.0', ...fakeReply(msg, fake, conn), id: msg.id }) + '\x00');
         }
       });
     });
@@ -430,6 +465,153 @@ async function withRig(opts, fn, appOpts) {
     });
   });
 
+  // --- S2: Monitor — change-group meter poller (ADR-11) ----------------------
+  const FAST = { pollMs: 30 };
+  const RMLR1 = 'channel.1.ref.mic.ratio';
+  const ERLE1 = 'channel.1.ERLE';
+  const connect = (app, fake) => call(app, 'POST', '/api/connect', { host: '127.0.0.1', port: fake.port });
+  const monitor = async (app) => (await call(app, 'GET', '/api/monitor')).body;
+  const meter = (snap, key) => snap.meters.find((m) => m.key === key);
+  const countOf = (fake, method) => fake.methods.filter((m) => m === method).length;
+
+  await test('meter poll defaults to 500 ms', async () => {
+    assert.strictEqual(createApp().poller.intervalMs, 500);
+  });
+
+  await test('GET /api/monitor: disconnected + empty rig → no meters, no findings', async () => {
+    await withRig({}, async (app) => {
+      const r = await call(app, 'GET', '/api/monitor');
+      assert.strictEqual(r.code, 200);
+      assert.strictEqual(r.body.state, 'disconnected');
+      assert.deepStrictEqual([r.body.meters, r.body.findings], [[], []]);
+      assert.ok(typeof r.body.t === 'number');
+    });
+  });
+
+  await test('monitor: one change group; Poll changes merged into the cache (partial updates kept)', async () => {
+    await withRig({}, async (app, fake) => {
+      await call(app, 'PUT', '/api/rig', aecRig());
+      fake.meters = { Room1_AEC: { [RMLR1]: 5, [ERLE1]: 10 } };
+      await connect(app, fake);
+      await wait(150);
+      let s = await monitor(app);
+      assert.strictEqual(s.state, 'connected');
+      assert.strictEqual(s.error, null);
+      assert.deepStrictEqual([meter(s, 'aec.rmlr').value, meter(s, 'aec.erle').value], [5, 10]);
+      assert.deepStrictEqual([meter(s, 'aec.rmlr').stale, meter(s, 'aec.rmlr').component, meter(s, 'aec.rmlr').pin],
+        [false, 'Room1_AEC', RMLR1]);
+      assert.ok(countOf(fake, 'ChangeGroup.AddComponentControl') >= 1);
+      // Only ERLE moves → Poll returns only ERLE; RMLR must survive from the cache.
+      fake.meters.Room1_AEC[ERLE1] = 12;
+      await wait(150);
+      assert.deepStrictEqual(fake.changeLog[fake.changeLog.length - 1].map((c) => c.Name), [ERLE1]);
+      s = await monitor(app);
+      assert.deepStrictEqual([meter(s, 'aec.rmlr').value, meter(s, 'aec.erle').value], [5, 12]);
+      assert.strictEqual(fake.groupIds.size, 1);
+    }, FAST);
+  });
+
+  await test('monitor: RMLR +5 → warn finding naming ref.gain in the snapshot', async () => {
+    await withRig({}, async (app, fake) => {
+      await call(app, 'PUT', '/api/rig', aecRig());
+      fake.meters = { Room1_AEC: { [RMLR1]: 5, [ERLE1]: 10 } };
+      await connect(app, fake);
+      await wait(150);
+      const f = (await monitor(app)).findings.find((x) => x.trigger && x.trigger.key === 'aec.rmlr');
+      assert.strictEqual(f.level, 'warn');
+      assert.strictEqual(f.adjust[0].pin, 'channel.1.ref.gain');
+    }, FAST);
+  });
+
+  await test('monitor: rig change → Clear + re-add on the same group; no second group (max 4, ADR-11)', async () => {
+    await withRig({}, async (app, fake) => {
+      await call(app, 'PUT', '/api/rig', aecRig());
+      fake.meters = { Room1_AEC: { [RMLR1]: 1, [ERLE1]: 2, 'channel.2.ref.mic.ratio': -4, 'channel.2.ERLE': 7 } };
+      await connect(app, fake);
+      await wait(150);
+      const ch2 = aecRig();
+      ch2.chains[0].aec.channel = 2;
+      await call(app, 'PUT', '/api/rig', ch2);
+      await wait(150);
+      assert.ok(countOf(fake, 'ChangeGroup.Clear') >= 1, 'group cleared');
+      assert.strictEqual(fake.groupIds.size, 1, `groups used: ${[...fake.groupIds]}`);
+      assert.strictEqual(countOf(fake, 'ChangeGroup.Destroy'), 0);
+      const s = await monitor(app);
+      assert.deepStrictEqual(s.meters.map((m) => [m.pin, m.value]), [['channel.2.ref.mic.ratio', -4], ['channel.2.ERLE', 7]]);
+    }, FAST);
+  });
+
+  await test('monitor: rig saved before a restart is polled on the next connect', async () => {
+    const rigPath = tmpRigPath();
+    fs.writeFileSync(rigPath, JSON.stringify(aecRig()));
+    await withRig({}, async (app, fake) => {
+      fake.meters = { Room1_AEC: { [RMLR1]: 0, [ERLE1]: 15 } };
+      await connect(app, fake);
+      await wait(150);
+      assert.strictEqual(meter(await monitor(app), 'aec.erle').value, 15);
+    }, { ...FAST, rigPath });
+  });
+
+  await test('monitor: disconnect → poller stops; state disconnected, meters stale, no findings', async () => {
+    await withRig({}, async (app, fake) => {
+      await call(app, 'PUT', '/api/rig', aecRig());
+      fake.meters = { Room1_AEC: { [RMLR1]: 5, [ERLE1]: 10 } };
+      await connect(app, fake);
+      await wait(120);
+      await call(app, 'POST', '/api/disconnect');
+      const polls = countOf(fake, 'ChangeGroup.Poll');
+      await wait(150);
+      assert.strictEqual(countOf(fake, 'ChangeGroup.Poll'), polls, 'no polls after disconnect');
+      const s = await monitor(app);
+      assert.strictEqual(s.state, 'disconnected');
+      assert.strictEqual(s.meters.length, 2);
+      assert.ok(s.meters.every((m) => m.stale), 'all meters stale');
+      assert.deepStrictEqual(s.findings, []);
+    }, FAST);
+  });
+
+  await test('monitor: remote drop → poller stops; reconnect rebuilds the group and polls again', async () => {
+    await withRig({}, async (app, fake) => {
+      await call(app, 'PUT', '/api/rig', aecRig());
+      fake.meters = { Room1_AEC: { [RMLR1]: 5, [ERLE1]: 10 } };
+      await connect(app, fake);
+      await wait(120);
+      for (const s of fake.socks) s.destroy();
+      await wait(80);
+      const polls = countOf(fake, 'ChangeGroup.Poll');
+      await wait(120);
+      assert.strictEqual(countOf(fake, 'ChangeGroup.Poll'), polls);
+      assert.ok(meter(await monitor(app), 'aec.rmlr').stale);
+      const adds = countOf(fake, 'ChangeGroup.AddComponentControl');
+      await connect(app, fake);
+      await wait(150);
+      assert.ok(countOf(fake, 'ChangeGroup.AddComponentControl') > adds, 'group re-added on the new connection');
+      const s = await monitor(app);
+      assert.deepStrictEqual([meter(s, 'aec.rmlr').value, meter(s, 'aec.rmlr').stale, s.error], [5, false, null]);
+    }, FAST);
+  });
+
+  await test('monitor: a Poll error is surfaced in the snapshot (meters stale), then clears on recovery', async () => {
+    await withRig({}, async (app, fake) => {
+      await call(app, 'PUT', '/api/rig', aecRig());
+      fake.meters = { Room1_AEC: { [RMLR1]: 5, [ERLE1]: 10 } };
+      await connect(app, fake);
+      await wait(120);
+      fake.pollError = 'boom';
+      await wait(120);
+      let s = await monitor(app);
+      assert.ok(/boom/.test(s.error), `error: ${s.error}`);
+      assert.ok(s.meters.every((m) => m.stale));
+      assert.deepStrictEqual(s.findings, [], 'no advice on stale values');
+      assert.strictEqual(s.state, 'connected', 'a QRC error reply does not drop the session');
+      fake.pollError = null;
+      await wait(120);
+      s = await monitor(app);
+      assert.strictEqual(s.error, null);
+      assert.strictEqual(meter(s, 'aec.rmlr').stale, false);
+    }, FAST);
+  });
+
   // --- S1: new shell (ADR-09) ------------------------------------------------
   await test('/ serves the Setup/Monitor shell; v1 simulator is gone', async () => {
     const app = await startApp();
@@ -439,6 +621,9 @@ async function withRig(opts, fn, appOpts) {
       assert.ok(/text\/html/.test(r.type));
       assert.ok(/id="tab-setup"/.test(r.text) && /id="tab-monitor"/.test(r.text), 'has both tabs');
       assert.ok(!/gain-model\.js/.test(r.text), 'no simulator script');
+      // S2: Monitor tab — RMLR + ERLE meters, ELR placeholder (ADR-07), findings.
+      assert.ok(/id="mon-rmlr"/.test(r.text) && /id="mon-erle"/.test(r.text) && /id="mon-findings"/.test(r.text));
+      assert.ok(/needs a named output component/.test(r.text), 'ELR card placeholder');
       assert.strictEqual((await getRaw(app, '/gain-model.js')).code, 404);
       assert.strictEqual((await getRaw(app, '/aec-erl-rmlr-emulator-v1.html')).code, 404, 'v1 reference not served');
     } finally {
