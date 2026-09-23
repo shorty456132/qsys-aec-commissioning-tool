@@ -122,16 +122,84 @@
         $('rig-msg').innerHTML = '<span class="err">' + esc(e.message) + '</span>';
       }
     }
-    if (rig) renderStage(role);
+    if (rig) (role === 'mixer' ? renderMixerPicker : renderStage)(role);
   }
 
-  const loadAllCandidates = () => STAGE_ROLES.forEach(loadCandidates);
+  const loadAllCandidates = () => [...STAGE_ROLES, 'mixer'].forEach(loadCandidates);
 
   for (const role of STAGE_ROLES) {
     candidates[role] = [];
     $(role + '-all').addEventListener('change', () => loadCandidates(role));
     $(role + '-comp').addEventListener('change', () => renderChannels(role, 1));
   }
+
+  // --- mixer crosspoints (S6): a list edited here, saved with the rest -------------
+  // xps mirrors chain().mixer until Save; key = mixer + in + out (the server rejects duplicates).
+  let xps = [];
+  candidates.mixer = [];
+  const xpKey = (x) => 'mixer.' + x.component + '.' + x.in + '.' + x.out;
+
+  function mixerSize(name, prop) {
+    const c = candidates.mixer.find((x) => x.name === name);
+    const n = c && parseInt(c.properties && c.properties[prop], 10);
+    return n > 0 ? n : FALLBACK_CHANNELS;
+  }
+
+  function numberOptions(id, n, keep) {
+    let opts = '';
+    for (let i = 1; i <= n; i++) opts += '<option>' + i + '</option>';
+    $(id).innerHTML = opts;
+    $(id).value = String(keep && keep <= n ? keep : 1);
+  }
+
+  function renderMixerPicker() {
+    const keep = $('mixer-comp').value || (xps[0] && xps[0].component) || '';
+    const names = candidates.mixer.map((c) => c.name);
+    let opts = '<option value="">(pick a mixer)</option>' + candidates.mixer.map((c) =>
+      '<option value="' + esc(c.name) + '">' + esc(c.name) + ' — ' + esc(c.type) + '</option>').join('');
+    if (keep && !names.includes(keep)) opts += '<option value="' + esc(keep) + '">' + esc(keep) + ' (' + (lastState === 'connected' ? 'not in this design' : 'saved') + ')</option>';
+    $('mixer-comp').innerHTML = opts;
+    $('mixer-comp').value = keep;
+    renderMixerSize();
+    renderXpList();
+  }
+
+  function renderMixerSize() {
+    const comp = $('mixer-comp').value;
+    numberOptions('mixer-in', mixerSize(comp, 'n_inputs'), Number($('mixer-in').value));
+    numberOptions('mixer-out', mixerSize(comp, 'n_outputs'), Number($('mixer-out').value));
+    for (const id of ['mixer-in', 'mixer-out', 'mixer-ref', 'mixer-add']) $(id).disabled = !comp;
+  }
+
+  function renderXpList() {
+    $('mixer-list').innerHTML = xps.length ? xps.map((x, i) =>
+      '<li><span>' + esc(x.component) + ' · In ' + x.in + ' → Out ' + x.out + '</span>' +
+      (x.feedsRef ? '<span class="tag">AEC ref</span>' : '') +
+      '<button type="button" data-rm="' + i + '">Remove</button></li>').join('')
+      : '<li><span class="csub">No crosspoints — this mic path isn\'t checked through the mixer.</span></li>';
+  }
+
+  $('mixer-all').addEventListener('change', () => loadCandidates('mixer'));
+  $('mixer-comp').addEventListener('change', renderMixerSize);
+  $('mixer-add').addEventListener('click', () => {
+    const x = { component: $('mixer-comp').value, in: Number($('mixer-in').value), out: Number($('mixer-out').value), feedsRef: $('mixer-ref').checked };
+    if (!x.component) return;
+    if (xps.some((y) => xpKey(y) === xpKey(x))) {
+      $('rig-msg').innerHTML = '<span class="err">In ' + x.in + ' → Out ' + x.out + ' is already in the list</span>';
+      return;
+    }
+    xps.push(x);
+    $('mixer-ref').checked = false;
+    $('rig-msg').textContent = 'Unsaved changes';
+    renderXpList();
+  });
+  $('mixer-list').addEventListener('click', (e) => {
+    const i = e.target.getAttribute && e.target.getAttribute('data-rm');
+    if (i === null || i === undefined) return;
+    xps.splice(Number(i), 1);
+    $('rig-msg').textContent = 'Unsaved changes';
+    renderXpList();
+  });
 
   // --- field readings (S4): empty box = not measured; the server checks ranges ----
   function renderField() {
@@ -163,6 +231,7 @@
       const comp = $(role + '-comp').value;
       next.chains[0][role] = comp ? { component: comp, channel: Number($(role + '-ch').value) } : null;
     }
+    next.chains[0].mixer = xps.map((x) => ({ ...x }));
     try { next.field = readField(); } catch (e) {
       $('rig-msg').innerHTML = '<span class="err">' + esc(e.message) + '</span>';
       return;
@@ -170,6 +239,8 @@
     $('rig-msg').textContent = 'Saving…';
     try {
       rig = await api('PUT', '/api/rig', next);
+      xps = chain().mixer.map((x) => ({ ...x }));
+      renderXpList();
       renderField();
       $('rig-msg').innerHTML = '<span class="ok">Saved to rig.json</span>';
     } catch (e) {
@@ -182,6 +253,8 @@
       rig = await api('GET', '/api/rig');
       $('chain-label').textContent = chain().label;
       STAGE_ROLES.forEach(renderStage);
+      xps = chain().mixer.map((x) => ({ ...x }));
+      renderMixerPicker();
       renderField();
     } catch (e) {
       $('rig-msg').innerHTML = '<span class="err">' + esc(e.message) + '</span>';
@@ -220,10 +293,33 @@
     card.querySelector('.val').textContent = v + pinned + (m.stale ? ' · stale' : '');
   }
 
+  // S6 — one row per saved crosspoint: gain + mutes (control values; the mixer has
+  // no meters). An open AEC-ref crosspoint is drawn red — the advisor says why.
+  function renderMixerCard(byKey) {
+    const list = rig ? chain().mixer : [];
+    if (!list.length) {
+      $('mon-mixer-rows').innerHTML = '<p class="csub" style="margin:8px 0 0">No crosspoints set — add them on the Setup tab.</p>';
+      return;
+    }
+    $('mon-mixer-rows').innerHTML = list.map((x) => {
+      const k = xpKey(x);
+      const g = byKey(k + '.gain');
+      const on = (m) => !!(m && m.value !== null && m.value >= 0.5);
+      const mutes = [on(byKey(k + '.inMute')) && 'in ' + x.in + ' muted', on(byKey(k + '.outMute')) && 'out ' + x.out + ' muted'].filter(Boolean);
+      const live = g && g.value !== null && !g.stale;
+      const closed = live && (g.value <= -100 || mutes.length);
+      const colour = !live ? 'var(--mute)' : x.feedsRef && !closed ? 'var(--red)' : '';
+      const val = g && g.value !== null ? (g.value > 0 ? '+' : '') + g.value.toFixed(1) + ' dB' : '—';
+      return '<div class="xprow"><span>In ' + x.in + ' → Out ' + x.out + '</span>' + (x.feedsRef ? '<span class="tag">AEC ref</span>' : '') +
+        '<span class="csub">' + esc(x.component) + (mutes.length ? ' · ' + mutes.join(', ') : '') + (g && g.stale ? ' · stale' : '') + '</span>' +
+        '<span class="v" style="color:' + colour + '">' + val + '</span></div>';
+    }).join('');
+  }
+
   function renderMonitor(s) {
     const where = s.error ? ' <span class="err">(' + esc(s.error) + ')</span>' : '';
     $('mon-status').innerHTML = '<i style="background:' + (COLORS[s.state] || COLORS.disconnected) + '"></i><span>' +
-      esc(s.state) + where + (s.meters.length ? '' : ' — no metered stage set; pick an input, AEC or output on the Setup tab') + '</span>';
+      esc(s.state) + where + (s.meters.length ? '' : ' — no metered stage set; pick an input, AEC, mixer crosspoint or output on the Setup tab') + '</span>';
     const byKey = (k) => s.meters.find((m) => m.key === k);
     renderMeter($('mon-input'), byKey('input.level'), { lo: -60, hi: 0, warn: (v) => v > -3 });
     const clip = byKey('input.clip');
@@ -231,6 +327,7 @@
     renderMeter($('mon-rmlr'), byKey('aec.rmlr'), { centred: true, warn: (v) => Math.abs(v) > 3 });
     renderMeter($('mon-erle'), byKey('aec.erle'));
     renderMeter($('mon-output'), byKey('output.level'), { lo: -60, hi: 0, warn: (v) => v > -3 });
+    renderMixerCard(byKey);
     // S5 — ELR is derived server-side; `needs` says why there's no value yet.
     const elr = s.derived && s.derived.elr && s.derived.elr[0];
     $('mon-elr-val').textContent = elr && elr.value !== null ? (elr.value > 0 ? '+' : '') + elr.value.toFixed(1) + ' dB' : '—';

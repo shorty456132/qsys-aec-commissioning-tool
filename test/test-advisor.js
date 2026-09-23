@@ -340,5 +340,68 @@ test('advise seat SPL: with an output stage, a low/high seat finding names the o
   assert.deepStrictEqual(byKey(advise(r, {}), 'field.seatSpl')[0].adjust, [], 'no output stage → text only');
 });
 
+// --- S6: mixer crosspoints ----------------------------------------------------------
+const XP_REF = { component: 'Mixer_8x8', in: 1, out: 8, feedsRef: true };
+const XP_PA = { component: 'Mixer_8x8', in: 1, out: 1, feedsRef: false };
+const mixRig = (mixer = [XP_PA, XP_REF]) => {
+  const r = defaultRig();
+  r.chains[0].aec = { component: 'Room1_AEC', channel: 1 };
+  r.chains[0].output = { component: 'Flex_Out_Core-1', channel: 1 };
+  r.chains[0].mixer = mixer;
+  return r;
+};
+const K = 'mixer.Mixer_8x8.1.8';
+const xpVals = (gain, inMute = 0, outMute = 0) => ({ [`${K}.gain`]: gain, [`${K}.inMute`]: inMute, [`${K}.outMute`]: outMute });
+const refF = (vals, mode) => advise(mixRig(), { 'chain-1': vals }, { mode }).filter((f) => f.id === `chain-1:${K}.ref`);
+
+test('meterList: crosspoints sit after the AEC and before the output, 3 values each', () => {
+  const m = meterList(mixRig());
+  assert.deepStrictEqual(m.map((x) => x.role), ['aec', 'aec', 'mixer', 'mixer', 'mixer', 'mixer', 'mixer', 'mixer', 'output']);
+  assert.deepStrictEqual(m.filter((x) => x.role === 'mixer').map((x) => x.pin), [
+    'input.1.output.1.gain', 'input.1.mute', 'output.1.mute', 'input.1.output.8.gain', 'input.1.mute', 'output.8.mute',
+  ]);
+});
+
+test('advise mixer: mic crosspoint open into the AEC ref → bad, AEC_Troubleshooting, names the crosspoint gain, any mode', () => {
+  for (const mode of MODES) {
+    const [f] = refF(xpVals(-6), mode);
+    assert.strictEqual(f.level, 'bad', mode);
+    assert.strictEqual(f.source, 'doc:AEC_Troubleshooting.md');
+    assert.deepStrictEqual(f.trigger, { key: `${K}.gain`, value: -6 });
+    assert.deepStrictEqual(f.adjust, [{ component: 'Mixer_8x8', pin: 'input.1.output.8.gain', label: 'Crosspoint gain' }]);
+    assert.ok(/underwater/i.test(f.text) && /input\.1\.output\.8\.gain/.test(f.text) && /-100 dB/.test(f.text), f.text);
+  }
+});
+
+test('advise mixer: ref crosspoint closed (−100 dB, input muted or output muted) → ok, nothing to adjust', () => {
+  for (const vals of [xpVals(-100), xpVals(0, 1, 0), xpVals(0, 0, 1)]) {
+    const [f] = refF(vals);
+    assert.strictEqual(f.level, 'ok', JSON.stringify(vals));
+    assert.deepStrictEqual(f.adjust, []);
+  }
+  assert.strictEqual(refF(xpVals(-99.9))[0].level, 'bad', 'anything above −100 is open');
+});
+
+test('advise mixer: crosspoints not feeding the ref → no finding; a missing value → no finding', () => {
+  const pa = 'mixer.Mixer_8x8.1.1';
+  const vals = { [`${pa}.gain`]: 0, [`${pa}.inMute`]: 0, [`${pa}.outMute`]: 0 };
+  assert.deepStrictEqual(advise(mixRig(), { 'chain-1': vals }).filter((f) => f.id.includes('mixer')), []);
+  for (const drop of ['gain', 'inMute', 'outMute']) {
+    const v = xpVals(-6);
+    delete v[`${K}.${drop}`];
+    assert.deepStrictEqual(refF(v), [], `no ${drop}`);
+  }
+});
+
+test('advise mixer: two ref crosspoints → two findings with unique ids', () => {
+  const r = mixRig([XP_REF, { ...XP_REF, in: 2 }]);
+  const k2 = 'mixer.Mixer_8x8.2.8';
+  const vals = { ...xpVals(0), [`${k2}.gain`]: 0, [`${k2}.inMute`]: 0, [`${k2}.outMute`]: 0 };
+  const f = advise(r, { 'chain-1': vals }).filter((x) => x.source === 'doc:AEC_Troubleshooting.md');
+  assert.strictEqual(f.length, 2);
+  assert.notStrictEqual(f[0].id, f[1].id);
+  assert.strictEqual(f[1].adjust[0].pin, 'input.2.output.8.gain');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

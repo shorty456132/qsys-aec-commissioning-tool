@@ -28,7 +28,8 @@ Rig = {
     micGain:   { component, channel } | null,  // gain block after input
     aec:       { component, channel } | null,
     automixer: { component, channel } | null,  // gating automixer
-    mixer:     [{ component, in, out }],       // monitored crosspoints (0..n)
+    mixer:     [{ component, in, out, feedsRef }], // monitored crosspoints (0..n); feedsRef (S6,
+                                               //   default false) = tech says it feeds the AEC reference
     output:    { component, channel } | null,  // line out / Dante out
   }],
   field: { seatSpl: [number], noiseFloor: number|null, rt60: number|null },
@@ -60,13 +61,6 @@ Finding = { id, level: 'ok'|'warn'|'bad', text,
 
 ## To Do
 
-**S6 — Mixer crosspoints (monitor 1..n)** *(needs S2)*
-Mixer dropdown → an in × out picker; add or remove several crosspoints;
-show crosspoint gain/mute; rule: a mic crosspoint routed into the AEC
-reference feed → bad ("underwater" effect, `AEC_Troubleshooting.md`).
-Tests first: add/remove crosspoints; pin naming per mixer type.
-`NEEDS-TEST:` matrix-mixer crosspoint pin names (emulation).
-
 **S7 — Gating automixer** *(needs S2)*
 Role + channel; gate/level meters; rules TBD from pins + docs.
 `NEEDS-TEST:` automixer type + pins; find docs before writing any rule.
@@ -90,6 +84,13 @@ live ranges).
 - (none)
 
 ## Done
+- **S6 — Mixer crosspoints.** `mixer` role (`/^mixer$/`); per crosspoint
+  the poller reads `input.I.output.O.gain` + `input.I.mute` + `output.O.mute`
+  (the mixer has no meters). Crosspoint `feedsRef` flag (contract updated);
+  duplicates → 400. Rule: `feedsRef` crosspoint open (gain > −100, neither side
+  muted) → bad "underwater", adjust crosspoint gain; closed → ok. Setup: in × out
+  picker + list; Monitor: mixer card. Emulation acceptance passed (live Set → bad → ok).
+  `NEEDS-TEST:` crosspoint mute pin (only when `crosspoint_mute` = "True").
 - **S5 — Output stage + derived ELR.** `output` role
   (`/^io_card_(flex|line)_out/i`; `output.level`, knob `output.gain`). New
   Monitor mode **Far-end test** → `derived.elr` = output level − mic input
@@ -147,6 +148,9 @@ live ranges).
   same family as the input "no signal" item)
 - Clip latch: a 500 ms poll can miss a short clip; `channel.N.clip.hold` (RW
   Bool) exists on the Flex
+- Crosspoint mute: a mixer with `crosspoint_mute` "True" has a per-crosspoint
+  mute pin (name unconfirmed). Turn it on in the emulation design, read the pin,
+  then add it to the "closed" check (S6 ignores it today)
 
 ---
 
@@ -179,3 +183,8 @@ live ranges).
   Core 24f + Mic/Line In, Flex In/Out, Line Out, SPA-Qf amp, meter2, 8×8
   mixer, gating automixer (types in ADR §Pins, ready for S6–S8). Flex Out and
   Line Out share pins. ELR needs a tech-set `farend` mode (contract updated).
+- **2026-09-23 (S6):** done, `npm test` 134 green. The AEC-ref crosspoint is
+  tagged by the tech (`feedsRef`, Andrew's call) → contract updated. CONFIRMED:
+  mixer mutes Poll as 0/1 ("unmuted"); `Component.Set` moves emulation controls
+  and Poll reports them. `meterList` walks `chainSelections()`; poller dedupes pins.
+  UI not clicked through by hand yet.

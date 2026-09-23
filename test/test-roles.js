@@ -3,7 +3,7 @@
 // Run: node test-roles.js
 
 const assert = require('assert');
-const { ROLES, STAGES, defaultRig, validateRig } = require('../src/roles');
+const { ROLES, STAGES, defaultRig, validateRig, chainSelections } = require('../src/roles');
 
 let passed = 0;
 let failed = 0;
@@ -168,6 +168,67 @@ test('validateRig field: ranges — SPL/noise 0…140 dB, RT60 > 0…20 s, ≤ 3
   throws400(withField({ rt60: 0 }), /rt60/);
   throws400(withField({ rt60: 20.1 }), /rt60/);
   throws400(withField({ seatSpl: new Array(33).fill(66) }), /seatSpl/);
+});
+
+// --- S6: mixer crosspoints ----------------------------------------------------------
+const XP = { component: 'Mixer_8x8', in: 1, out: 8, feedsRef: false };
+const withMixer = (mixer) => { const r = defaultRig(); r.chains[0].mixer = mixer; return r; };
+
+test('mixer role: typeMatch accepts the CONFIRMED `mixer` type only', () => {
+  const r = ROLES.mixer;
+  assert.ok(r.typeMatch.test('mixer'));
+  assert.ok(!r.typeMatch.test('auto_mixer_gating_adaptive'));
+  assert.ok(!r.typeMatch.test('gain'));
+});
+
+test('mixer role: meters(crosspoint) → crosspoint gain + input/output mute pins (CONFIRMED)', () => {
+  const m = ROLES.mixer.meters(XP);
+  assert.deepStrictEqual(m.map((x) => x.pin), ['input.1.output.8.gain', 'input.1.mute', 'output.8.mute']);
+  assert.deepStrictEqual(m.map((x) => x.key),
+    ['mixer.Mixer_8x8.1.8.gain', 'mixer.Mixer_8x8.1.8.inMute', 'mixer.Mixer_8x8.1.8.outMute']);
+  assert.deepStrictEqual([m[0].unit, m[0].lo, m[0].hi], ['dB', -100, 10]);
+  assert.deepStrictEqual([m[1].lo, m[1].hi, m[2].lo, m[2].hi], [0, 1, 0, 1]);
+});
+
+test('mixer role: keys differ per crosspoint and per mixer', () => {
+  const keys = [XP, { ...XP, out: 2 }, { ...XP, in: 2 }, { ...XP, component: 'Mixer_B' }]
+    .map((x) => ROLES.mixer.meters(x)[0].key);
+  assert.strictEqual(new Set(keys).size, 4, keys.join(' '));
+});
+
+test('mixer role: knobs → crosspoint gain −100…+10 (CONFIRMED)', () => {
+  const k = ROLES.mixer.knobs({ ...XP, in: 3, out: 5 });
+  assert.deepStrictEqual(k.map((x) => [x.key, x.pin, x.lo, x.hi]), [['mixer.gain', 'input.3.output.5.gain', -100, 10]]);
+});
+
+test('validateRig mixer: add several crosspoints, remove one — round-trips; feedsRef defaults false', () => {
+  const three = [XP, { component: 'Mixer_8x8', in: 1, out: 1 }, { component: 'Mixer_8x8', in: 2, out: 8, feedsRef: true }];
+  const v = validateRig(withMixer(three)).chains[0].mixer;
+  assert.deepStrictEqual(v, [XP, { component: 'Mixer_8x8', in: 1, out: 1, feedsRef: false }, { component: 'Mixer_8x8', in: 2, out: 8, feedsRef: true }]);
+  const two = validateRig(withMixer([v[0], v[2]])).chains[0].mixer;
+  assert.deepStrictEqual(two.map((x) => [x.in, x.out]), [[1, 8], [2, 8]]);
+  assert.deepStrictEqual(validateRig(withMixer([])).chains[0].mixer, []);
+});
+
+test('validateRig mixer: bad crosspoint → 400 (in/out, component, feedsRef, duplicate)', () => {
+  throws400(withMixer([{ ...XP, in: 0 }]), /mixer\[0\]/);
+  throws400(withMixer([{ ...XP, out: '8' }]), /mixer\[0\]/);
+  throws400(withMixer([{ ...XP, component: '' }]), /mixer\[0\]\.component/);
+  throws400(withMixer([{ ...XP, feedsRef: 'yes' }]), /mixer\[0\]\.feedsRef/);
+  throws400(withMixer([XP, { ...XP, feedsRef: true }]), /mixer\[1\].*duplicate/i);
+  throws400(withMixer({ ...XP }), /mixer must be an array/);
+});
+
+test('chainSelections: signal order input → micGain → aec → automixer → mixer[] → output, unset stages skipped', () => {
+  const r = withMixer([XP, { ...XP, out: 2 }]);
+  const c = r.chains[0];
+  c.output = { component: 'Out', channel: 1 };
+  c.input = { component: 'In', channel: 1 };
+  c.aec = { component: 'A', channel: 1 };
+  assert.deepStrictEqual(chainSelections(c).map(([role, sel]) => [role, sel.component, sel.out]), [
+    ['input', 'In', undefined], ['aec', 'A', undefined], ['mixer', 'Mixer_8x8', 8], ['mixer', 'Mixer_8x8', 2], ['output', 'Out', undefined],
+  ]);
+  assert.deepStrictEqual(chainSelections(defaultRig().chains[0]), []);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

@@ -50,10 +50,49 @@ const ROLES = {
       { key: 'output.gain', pin: `channel.${channel}.output.gain`, label: 'Output gain', lo: -100, hi: 20 },
     ],
   },
+  // S6. One selection = one crosspoint {component, in, out, feedsRef}. The mixer
+  // has no meters, so these are control values the poller reads (CONFIRMED,
+  // type `mixer`, Core 24f). A crosspoint is closed at −100 dB or when its
+  // input or output is muted. NEEDS-TEST: the crosspoint mute pin that exists
+  // only when the design property crosspoint_mute is "True" (not in the design).
+  mixer: {
+    id: 'mixer',
+    label: 'Mixer crosspoint',
+    typeMatch: /^mixer$/i, // CONFIRMED: mixer (gating automixer is auto_mixer_gating_adaptive → S7)
+    meters: (x) => {
+      const k = crosspointKey(x);
+      const at = `In ${x.in} → Out ${x.out}`;
+      return [
+        { key: `${k}.gain`, pin: `input.${x.in}.output.${x.out}.gain`, label: `${at} gain`, unit: 'dB', lo: -100, hi: 10 },
+        // Boolean; Poll reports it as 0/1 like the Flex clip (CONFIRMED there).
+        { key: `${k}.inMute`, pin: `input.${x.in}.mute`, label: `In ${x.in} mute`, unit: '', lo: 0, hi: 1 },
+        { key: `${k}.outMute`, pin: `output.${x.out}.mute`, label: `Out ${x.out} mute`, unit: '', lo: 0, hi: 1 },
+      ];
+    },
+    knobs: (x) => [
+      { key: 'mixer.gain', pin: `input.${x.in}.output.${x.out}.gain`, label: 'Crosspoint gain', lo: -100, hi: 10 },
+    ],
+  },
 };
+
+// Meter-key prefix for one crosspoint — unique per mixer + in + out.
+function crosspointKey(x) {
+  return `mixer.${x.component}.${x.in}.${x.out}`;
+}
 
 // Single-selection stages of a chain, in signal order. `mixer` is the list stage.
 const STAGES = ['input', 'micGain', 'aec', 'automixer', 'output'];
+
+// Every set selection of a chain as [roleId, sel], in signal order:
+// input → micGain → aec → automixer → mixer crosspoints → output.
+function chainSelections(chain) {
+  const one = (s) => (chain[s] ? [[s, chain[s]]] : []);
+  return [
+    ...['input', 'micGain', 'aec', 'automixer'].flatMap(one),
+    ...(chain.mixer || []).map((x) => ['mixer', x]),
+    ...one('output'),
+  ];
+}
 const CHAIN_KEYS = new Set(['id', 'label', 'mixer', ...STAGES]);
 
 function defaultRig() {
@@ -75,11 +114,14 @@ function validateSelection(sel, where) {
   return { component: sel.component, channel: sel.channel };
 }
 
+// S6 — feedsRef: the tech says this crosspoint feeds the AEC reference (QRC
+// can't see wiring, ADR-10). Optional, default false.
 function validateCrosspoint(x, where) {
-  if (!x || typeof x !== 'object') throw bad(`${where} must be {component, in, out}`);
+  if (!x || typeof x !== 'object') throw bad(`${where} must be {component, in, out, feedsRef}`);
   if (!isName(x.component)) throw bad(`${where}.component must be a component Code Name`);
   if (!isChannel(x.in) || !isChannel(x.out)) throw bad(`${where}.in/out must be integers ≥ 1`);
-  return { component: x.component, in: x.in, out: x.out };
+  if (x.feedsRef !== undefined && typeof x.feedsRef !== 'boolean') throw bad(`${where}.feedsRef must be true or false`);
+  return { component: x.component, in: x.in, out: x.out, feedsRef: x.feedsRef === true };
 }
 
 function validateChain(c, i) {
@@ -91,7 +133,13 @@ function validateChain(c, i) {
   for (const s of STAGES) out[s] = validateSelection(c[s], `${where}.${s}`);
   const mixer = c.mixer === undefined ? [] : c.mixer;
   if (!Array.isArray(mixer)) throw bad(`${where}.mixer must be an array`);
-  out.mixer = mixer.map((x, j) => validateCrosspoint(x, `${where}.mixer[${j}]`));
+  const seen = new Set();
+  out.mixer = mixer.map((x, j) => {
+    const v = validateCrosspoint(x, `${where}.mixer[${j}]`);
+    if (seen.has(crosspointKey(v))) throw bad(`${where}.mixer[${j}]: duplicate crosspoint In ${v.in} → Out ${v.out} on ${v.component}`);
+    seen.add(crosspointKey(v));
+    return v;
+  });
   // Key order matches defaultRig() so round-trips compare equal.
   return { id: out.id, label: out.label, input: out.input, micGain: out.micGain, aec: out.aec,
     automixer: out.automixer, mixer: out.mixer, output: out.output };
@@ -131,4 +179,4 @@ function validateRig(rig) {
   return { chains: rig.chains.map(validateChain), field: validateField(rig.field) };
 }
 
-module.exports = { ROLES, STAGES, defaultRig, validateRig };
+module.exports = { ROLES, STAGES, defaultRig, validateRig, chainSelections, crosspointKey };

@@ -120,15 +120,24 @@ Output (2026-09-23, Core 24f) — `io_card_flex_out_core_24f`, `io_card_line_out
 | `channel.N.digital.output.level` | Float RO | −120…+20 dB | Output level meter (treated as dBFS) |
 | `channel.N.output.gain` | Float RW | −100…+20 dB | Output gain |
 
-Types seen, pins not mapped: `mixer` (S6), `auto_mixer_gating_adaptive` (S7),
+Mixer (2026-09-23) — type `mixer` (props `n_inputs`, `n_outputs`, `crosspoint_mute` "False"); **no meters**
+| Pin | Type / dir | Range | Role |
+|---|---|---|---|
+| `input.I.output.O.gain` | Float RW | −100…+10 dB | Crosspoint gain (−100 = off) |
+| `input.N.mute` / `output.N.mute` | Bool RW | — | Mutes (**Poll → 0/1**, String "unmuted") |
+Also `input.N.gain|trim|solo|invert`, `output.N.gain|invert`. The AEC-ref crosspoint
+is tagged by the tech (`feedsRef`) — QRC can't see wiring (ADR-10).
+
+Types seen, pins not mapped: `auto_mixer_gating_adaptive` (S7),
 `meter2`, `spaq_amplifier` — re-read their controls in their slice.
 
 - `NEEDS-TEST:` RMLR sign convention (does +ve mean ref hotter than mic?) —
   needs a Core with audio.
 - `NEEDS-TEST:` that `digital.input.level` reads dBFS (0 = full scale) on a
   live Core. The input rules assume it does (S10).
-- `NEEDS-TEST:` pins for Matrix Mixer crosspoints, Gating Automixer, Gain;
-  type + pins for Dante Rx/Tx (check each in emulation in its own slice).
+- `NEEDS-TEST:` pins for Gating Automixer, Gain; the crosspoint mute pin
+  (only when `crosspoint_mute` = "True"); type + pins for Dante Rx/Tx (check
+  each in emulation in its own slice).
 
 ### Advisor thresholds (sources for ADR-12)
 | Rule | Threshold | Source |
@@ -148,13 +157,15 @@ Types seen, pins not mapped: `mixer` (S6), `auto_mixer_gating_adaptive` (S7),
 ---
 
 ## Resume notes
-1. The v2 plan is in TASKS.md. S1–S5 are done → next is **S6** (S7–S9 also
+1. The v2 plan is in TASKS.md. S1–S6 are done → next is **S7** (S8, S9 also
    only need S2). The contracts at the top of TASKS are fixed; change them only
    by editing both files.
-2. `npm test` is 120 green after S5. The Setup stage editor in `app.js` is
+2. `npm test` is 134 green after S6. The Setup stage editor in `app.js` is
    generic: add a role id to `STAGE_ROLES` + a `data-role` row in the HTML. Tests pass `rigPath` (and `pollMs: 30`) to
    `createApp` so they never touch the repo's `rig.json`. A new metered role
-   only needs `roles.js` `meters()` — `meterList` + the poller pick it up.
+   only needs `roles.js` `meters()` — `meterList` (via `chainSelections`) + the
+   poller pick it up. RW controls can be "metered" too (S6 mixer). In emulation,
+   `Component.Set` moves controls and Poll reports it → use it to script acceptance.
 3. Emulation: `127.0.0.1:1710`, Core 24f design = `200ms_Acoustic_Echo_Canceler`,
    `Mic/Line_In_Core-1`, `Flex_In_Core-1`, `Flex_Out_Core-1`, `Line_Out_Core-1`,
    `Mixer_8x8`, `Gating_Automatic_Mic_Mixer`, meter, SPA-Qf amp. Server: `npm start` (`node src/server.js`) (:8080; `PORT=` to override).

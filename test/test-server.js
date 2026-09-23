@@ -28,6 +28,9 @@ const FAKE_COMPONENTS = [
   { ID: 'Room1_AEC', Name: 'Room1_AEC', Type: 'acoustic_echo_canceler_simd', Properties: [{ Name: 'tail_length', Value: '0.2' }, { Name: 'channel_count', Value: '2' }], Controls: null, ControlSource: 2 },
   // S3: CONFIRMED Flex type string; emulation reports no properties for it.
   { ID: 'Flex_In_Core-1', Name: 'Flex_In_Core-1', Type: 'io_card_flex_in_core_8flex', Properties: [], Controls: null, ControlSource: 2 },
+  // S6: CONFIRMED mixer + gating automixer types and size properties (Core 24f emulation).
+  { ID: 'Mixer_8x8', Name: 'Mixer_8x8', Type: 'mixer', Properties: [{ Name: 'n_inputs', Value: '8' }, { Name: 'n_outputs', Value: '8' }, { Name: 'crosspoint_mute', Value: 'False' }], Controls: null, ControlSource: 2 },
+  { ID: 'Gating_Automatic_Mic_Mixer', Name: 'Gating_Automatic_Mic_Mixer', Type: 'auto_mixer_gating_adaptive', Properties: [{ Name: 'n_channels', Value: '8' }], Controls: null, ControlSource: 2 },
 ];
 const FAKE_CONTROLS = {
   Room1_AEC: [
@@ -52,6 +55,7 @@ function fakeReply(msg, fake, conn) {
   }
   if (msg.method === 'ChangeGroup.AddComponentControl') {
     fake.groupIds.add(p.Id);
+    fake.adds.push(p.Component);
     if (!conn.groups.has(p.Id)) conn.groups.set(p.Id, new Map());
     const g = conn.groups.get(p.Id);
     for (const c of p.Component.Controls) {
@@ -83,7 +87,7 @@ function fakeReply(msg, fake, conn) {
 }
 
 function startFakeQRC({ silent = false } = {}) {
-  const fake = { socks: new Set(), methods: [], meters: {}, groupIds: new Set(), changeLog: [], pollError: null };
+  const fake = { socks: new Set(), methods: [], meters: {}, groupIds: new Set(), adds: [], changeLog: [], pollError: null };
   return new Promise((resolve) => {
     fake.srv = net.createServer((sock) => {
       const conn = { groups: new Map() };
@@ -292,7 +296,7 @@ async function withRig(opts, fn, appOpts) {
       await call(app, 'POST', '/api/connect', { host: '127.0.0.1', port: fake.port });
       const r = await call(app, 'GET', '/api/components');
       assert.strictEqual(r.code, 200, JSON.stringify(r.body));
-      assert.deepStrictEqual(r.body.components.map((c) => [c.name, c.aecCandidate]), [['Room1_AEC', true], ['Flex_In_Core-1', false], ['MyGain', false]]);
+      assert.deepStrictEqual(r.body.components.map((c) => [c.name, c.aecCandidate]), [['Room1_AEC', true], ['Flex_In_Core-1', false], ['Gating_Automatic_Mic_Mixer', false], ['Mixer_8x8', false], ['MyGain', false]]);
       assert.ok(fake.methods.includes('Component.GetComponents'));
     });
   });
@@ -458,7 +462,7 @@ async function withRig(opts, fn, appOpts) {
       assert.deepStrictEqual(r.body.components.map((c) => c.name), ['Room1_AEC']);
       assert.strictEqual(r.body.components[0].properties.channel_count, '2');
       const all = await call(app, 'GET', '/api/roles/aec/candidates?all=1');
-      assert.deepStrictEqual(all.body.components.map((c) => c.name).sort(), ['Flex_In_Core-1', 'MyGain', 'Room1_AEC']);
+      assert.deepStrictEqual(all.body.components.map((c) => c.name).sort(), ['Flex_In_Core-1', 'Gating_Automatic_Mic_Mixer', 'Mixer_8x8', 'MyGain', 'Room1_AEC']);
     });
   });
 
@@ -779,6 +783,51 @@ async function withRig(opts, fn, appOpts) {
     });
   });
 
+  // --- S6: mixer crosspoints -------------------------------------------------------
+  const mixRig = () => {
+    const r = aecRig();
+    r.chains[0].mixer = [
+      { component: 'Mixer_8x8', in: 1, out: 1, feedsRef: false },
+      { component: 'Mixer_8x8', in: 1, out: 8, feedsRef: true },
+    ];
+    return r;
+  };
+
+  await test('GET /api/roles/mixer/candidates → only the `mixer`, with its in/out counts; not the automixer', async () => {
+    await withRig({}, async (app, fake) => {
+      await connect(app, fake);
+      const r = await call(app, 'GET', '/api/roles/mixer/candidates');
+      assert.strictEqual(r.code, 200, JSON.stringify(r.body));
+      assert.deepStrictEqual(r.body.components.map((c) => c.name), ['Mixer_8x8']);
+      assert.deepStrictEqual([r.body.components[0].properties.n_inputs, r.body.components[0].properties.n_outputs], ['8', '8']);
+    });
+  });
+
+  await test('monitor: crosspoints polled; a shared input mute is added once; mic open into the AEC ref → bad', async () => {
+    await withRig({}, async (app, fake) => {
+      assert.strictEqual((await call(app, 'PUT', '/api/rig', mixRig())).code, 200);
+      fake.meters = {
+        Room1_AEC: { [RMLR1]: 0, [ERLE1]: 10 },
+        Mixer_8x8: { 'input.1.output.1.gain': 0, 'input.1.output.8.gain': -6, 'input.1.mute': 0, 'output.1.mute': 0, 'output.8.mute': 0 },
+      };
+      await connect(app, fake);
+      await wait(150);
+      const pins = fake.adds.filter((c) => c.Name === 'Mixer_8x8').flatMap((c) => c.Controls.map((x) => x.Name));
+      assert.deepStrictEqual(pins.slice().sort(), ['input.1.mute', 'input.1.output.1.gain', 'input.1.output.8.gain', 'output.1.mute', 'output.8.mute']);
+      let s = await monitor(app);
+      assert.strictEqual(s.error, null);
+      assert.deepStrictEqual([meter(s, 'mixer.Mixer_8x8.1.8.gain').value, meter(s, 'mixer.Mixer_8x8.1.8.inMute').value], [-6, 0]);
+      assert.strictEqual(meter(s, 'mixer.Mixer_8x8.1.1.inMute').value, 0, 'shared pin reaches both crosspoints');
+      const ref = () => s.findings.find((f) => f.id === 'chain-1:mixer.Mixer_8x8.1.8.ref');
+      assert.strictEqual(ref().level, 'bad');
+      assert.strictEqual(ref().adjust[0].pin, 'input.1.output.8.gain');
+      fake.meters.Mixer_8x8['output.8.mute'] = 1;
+      await wait(150);
+      s = await monitor(app);
+      assert.strictEqual(ref().level, 'ok', 'ref output muted → closed');
+    }, FAST);
+  });
+
   // --- S1: new shell (ADR-09) ------------------------------------------------
   await test('/ serves the Setup/Monitor shell; v1 simulator is gone', async () => {
     const app = await startApp();
@@ -799,6 +848,9 @@ async function withRig(opts, fn, appOpts) {
       // S5: output stage on Setup; output meter, ELR value, far-end mode on Monitor.
       assert.ok(/id="output-comp"/.test(r.text) && /id="output-ch"/.test(r.text), 'output stage picker');
       assert.ok(/id="mon-output"/.test(r.text) && /id="mon-elr-val"/.test(r.text) && /value="farend"/.test(r.text), 'output meter, ELR, far-end mode');
+      // S6: crosspoint picker (in × out + feeds-ref flag, add/remove) on Setup; mixer card on Monitor.
+      assert.ok(['mixer-comp', 'mixer-in', 'mixer-out', 'mixer-ref', 'mixer-add', 'mixer-list', 'mixer-all'].every((id) => r.text.includes(`id="${id}"`)), 'crosspoint picker');
+      assert.ok(/id="mon-mixer"/.test(r.text), 'mixer card');
       assert.strictEqual((await getRaw(app, '/gain-model.js')).code, 404);
       assert.strictEqual((await getRaw(app, '/aec-erl-rmlr-emulator-v1.html')).code, 404, 'v1 reference not served');
     } finally {

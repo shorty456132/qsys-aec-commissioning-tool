@@ -8,7 +8,7 @@
 // caller leaves stale meters out, so there's never advice on stale data.
 // Every finding names its trigger, the control(s) to turn and its source.
 
-const { ROLES } = require('./roles');
+const { ROLES, crosspointKey } = require('./roles');
 
 // RMLR ≈ 0 dB (doc: AEC_Gain_Structure.md); the ±3 dB window is heuristic (v1).
 const RMLR_WINDOW_DB = 3;
@@ -126,6 +126,33 @@ function elrRule(chain, values, mode) {
   }];
 }
 
+// S6 — a mic crosspoint the tech marked as feeding the AEC reference must be
+// closed: the AEC would cancel the talker ("underwater", doc). Closed = −100 dB
+// (the pin's minimum) or its input/output muted. Needs all three values.
+const XP_OFF_DB = -100;
+const TROUBLE_DOC = 'doc:AEC_Troubleshooting.md';
+
+function refCrosspointRule(chain, x, values) {
+  if (!x.feedsRef) return [];
+  const k = crosspointKey(x);
+  const [gain, inMute, outMute] = ['gain', 'inMute', 'outMute'].map((s) => values[`${k}.${s}`]);
+  if (![gain, inMute, outMute].every((v) => typeof v === 'number')) return [];
+  const at = `Mic crosspoint In ${x.in} → Out ${x.out} on ${x.component}`;
+  const base = { id: `${chain.id}:${k}.ref`, trigger: { key: `${k}.gain`, value: gain }, source: TROUBLE_DOC };
+  if (gain <= XP_OFF_DB || inMute >= 0.5 || outMute >= 0.5) {
+    const why = gain <= XP_OFF_DB ? `${XP_OFF_DB} dB` : inMute >= 0.5 ? `input ${x.in} muted` : `output ${x.out} muted`;
+    return [{ ...base, level: 'ok', text: `${at} is closed (${why}) — the mic stays out of the AEC reference.`, adjust: [] }];
+  }
+  const g = ROLES.mixer.knobs(x).find((y) => y.key === 'mixer.gain');
+  const knobRef = { component: x.component, pin: g.pin, label: g.label };
+  return [{
+    ...base,
+    level: 'bad',
+    text: `${at} is open (${fmtDb(gain)}) into the AEC reference — the AEC cancels the talker and the far end hears them "underwater". Pull ${g.label} (${g.pin}) on ${x.component} to ${XP_OFF_DB} dB.`,
+    adjust: [knobRef],
+  }];
+}
+
 // S4 — field readings (rig.field). These need no meters, so they apply with or
 // without a Core. S5: with an output stage set, a one-way seat finding names
 // its gain knob; otherwise the adjustment lives in the text only.
@@ -211,6 +238,7 @@ function advise(rig, values, { mode = 'off', props = null } = {}) {
     out.push(...levelRule(chain, v['input.level'], mode));
     out.push(...rmlrRule(chain, v['aec.rmlr']));
     out.push(...tailRule(chain, field.rt60, props));
+    for (const x of chain.mixer || []) out.push(...refCrosspointRule(chain, x, v));
     out.push(...outputPeakRule(chain, v['output.level']));
     out.push(...elrRule(chain, v, mode));
   }

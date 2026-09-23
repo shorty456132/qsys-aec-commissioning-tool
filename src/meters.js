@@ -6,7 +6,7 @@
 // never leak a second group (a Core allows 4 per connection). All QRC traffic
 // goes through `session.call` (ADR-03).
 
-const { ROLES, STAGES } = require('./roles');
+const { ROLES, chainSelections } = require('./roles');
 const { advise, deriveElr, MODES } = require('./advisor');
 const { normalizeComponents } = require('./discovery');
 
@@ -17,10 +17,9 @@ const DEFAULT_POLL_MS = 500;
 function meterList(rig) {
   const out = [];
   for (const chain of rig.chains) {
-    for (const stage of STAGES) {
-      const sel = chain[stage];
+    for (const [stage, sel] of chainSelections(chain)) {
       const role = ROLES[stage];
-      if (!sel || !role) continue;
+      if (!role) continue; // stage without a role yet (micGain, automixer)
       for (const m of role.meters(sel)) out.push({ chain: chain.id, role: role.id, component: sel.component, ...m });
     }
   }
@@ -119,14 +118,15 @@ class MeterPoller {
         if (gen !== this._gen) return;
         this.props = Object.fromEntries(comps.map((c) => [c.name, c.properties]));
       }
+      // A Set per component: crosspoints on the same input share its mute pin (S6).
       const byComponent = new Map();
       for (const m of this.meters) {
-        if (!byComponent.has(m.component)) byComponent.set(m.component, []);
-        byComponent.get(m.component).push(m.pin);
+        if (!byComponent.has(m.component)) byComponent.set(m.component, new Set());
+        byComponent.get(m.component).add(m.pin);
       }
       for (const [name, pins] of byComponent) {
         if (gen !== this._gen) return;
-        await this.session.call((c) => c.changeGroupAddComponentControl(GROUP_ID, name, pins));
+        await this.session.call((c) => c.changeGroupAddComponentControl(GROUP_ID, name, [...pins]));
         this._built = true;
       }
     } catch (e) {

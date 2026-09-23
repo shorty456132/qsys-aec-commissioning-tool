@@ -33,6 +33,16 @@ label.f{display:flex;flex-direction:column;gap:3px;font-size:11.5px;color:var(--
 .stage{display:grid;grid-template-columns:110px minmax(200px,340px) 90px auto;gap:10px;align-items:end}
 @media (max-width:700px){.stage{grid-template-columns:1fr}}
 .stage .name{font-weight:500;padding-bottom:6px}
+.xpstage .name{font-weight:500;margin:0 0 6px}
+.xppick{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
+.xplist{list-style:none;margin:8px 0 0;padding:0;font-size:12.5px}
+.xplist li{display:flex;gap:10px;align-items:center;padding:4px 0;border-top:1px solid var(--edge)}
+.xplist li:first-child{border-top:none}
+.xplist button{padding:2px 8px;font-size:11.5px}
+.tag{font-size:10.5px;font-weight:600;padding:1px 6px;border-radius:3px;background:var(--knob);color:#fff}
+.xprow{display:flex;gap:10px;align-items:baseline;padding:4px 0;border-top:1px solid var(--edge);font-variant-numeric:tabular-nums}
+.xprow:first-of-type{border-top:none}
+.xprow .v{margin-left:auto}
 .chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--sub);padding-bottom:6px}
 .chk input{margin:0}
 .savebar{display:flex;gap:10px;align-items:center;margin:14px 0 0}
@@ -98,6 +108,18 @@ label.f{display:flex;flex-direction:column;gap:3px;font-size:11.5px;color:var(--
         <label class="f">Channel <select id="aec-ch"></select></label>
         <label class="chk"><input type="checkbox" id="aec-all"> show all components</label>
       </div>
+      <div class="xpstage" data-role="mixer">
+        <div class="name">Mixer crosspoints</div>
+        <div class="xppick">
+          <label class="f">Component <select id="mixer-comp"></select></label>
+          <label class="f">In <select id="mixer-in"></select></label>
+          <label class="f">Out <select id="mixer-out"></select></label>
+          <label class="chk"><input type="checkbox" id="mixer-ref"> feeds the AEC reference</label>
+          <button id="mixer-add" type="button">Add crosspoint</button>
+          <label class="chk"><input type="checkbox" id="mixer-all"> show all components</label>
+        </div>
+        <ul id="mixer-list" class="xplist"></ul>
+      </div>
       <div class="stage" data-role="output">
         <div class="name">Output</div>
         <label class="f">Component <select id="output-comp"></select></label>
@@ -105,7 +127,7 @@ label.f{display:flex;flex-direction:column;gap:3px;font-size:11.5px;color:var(--
         <label class="chk"><input type="checkbox" id="output-all"> show all components</label>
       </div>
     </div>
-    <p class="note">Components are listed by Code Name. The list is filtered to the stage's component type; tick “show all” if yours isn't there. The input filter knows Flex inputs only so far — Mic/Line In and Dante Rx need “show all”, and their meters may not read until their pins are confirmed. The output filter likewise knows Flex outputs only. More stages arrive in later slices.</p>
+    <p class="note">Components are listed by Code Name. The list is filtered to the stage's component type; tick “show all” if yours isn't there. The input filter knows Flex inputs only so far — Mic/Line In and Dante Rx need “show all”, and their meters may not read until their pins are confirmed. The output filter likewise knows Flex outputs only. Add each mixer crosspoint on this mic's path; tick “feeds the AEC reference” on the one that goes to the AEC's reference input — the app can't see wiring, so it relies on you. More stages arrive in later slices.</p>
   </div>
 
   <div class="panel">
@@ -158,6 +180,10 @@ label.f{display:flex;flex-direction:column;gap:3px;font-size:11.5px;color:var(--
         <div class="track"><div class="fill"></div></div>
         <div class="scale"><span>−60</span><span>−30</span><span>0</span></div>
         <div class="val">—</div>
+      </div>
+      <div class="card" id="mon-mixer">
+        <div class="ctitle">Mixer crosspoints <span class="csub">gain · mutes · AEC ref must be closed</span></div>
+        <div id="mon-mixer-rows"><p class="csub" style="margin:8px 0 0">No crosspoints set — add them on the Setup tab.</p></div>
       </div>
       <div class="card" id="mon-elr">
         <div class="ctitle">ELR <span class="csub">output − mic echo level (derived) · target ≥ 6 dB</span></div>
