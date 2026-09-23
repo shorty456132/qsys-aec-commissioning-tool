@@ -5,9 +5,35 @@ const fs = require('fs');
 const path = require('path');
 const { Session, SessionError } = require('./session');
 const { normalizeComponents, normalizeControls } = require('./discovery');
+const { ROLES, defaultRig, validateRig } = require('./roles');
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 8080;
 const PUBLIC_DIR = path.join(__dirname, 'public');
+const DEFAULT_RIG_PATH = path.join(__dirname, 'rig.json');
+
+// --- rig.json (ADR-10) ---------------------------------------------------------
+// Read on every GET so the file is the only source of truth. A corrupt file is
+// surfaced as a 500, never silently replaced by the default.
+function loadRig(rigPath) {
+  let text;
+  try {
+    text = fs.readFileSync(rigPath, 'utf-8');
+  } catch (e) {
+    if (e.code === 'ENOENT') return defaultRig();
+    throw new SessionError(`Cannot read ${path.basename(rigPath)}: ${e.message}`, 500);
+  }
+  try {
+    return validateRig(JSON.parse(text));
+  } catch (e) {
+    throw new SessionError(`${path.basename(rigPath)} is invalid: ${e.message}`, 500);
+  }
+}
+
+function saveRig(rigPath, rig) {
+  const tmp = rigPath + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(rig, null, 2) + '\n');
+  fs.renameSync(tmp, rigPath); // atomic replace — no half-written rig on a crash
+}
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -53,9 +79,16 @@ function readJson(req) {
 }
 
 // --- /api router -------------------------------------------------------------
-// T7+ adds /api/poll, /api/set here — all through `session.call`.
-function apiRoutes(session) {
+// All QRC traffic goes through `session.call` (ADR-03).
+function apiRoutes(session, rigPath) {
   return {
+    // S1 — chain setup persistence.
+    'GET /api/rig': (req, res) => json(res, 200, loadRig(rigPath)),
+    'PUT /api/rig': async (req, res) => {
+      const rig = validateRig(await readJson(req));
+      saveRig(rigPath, rig);
+      json(res, 200, rig);
+    },
     'GET /api/ping': (req, res) => json(res, 200, { ok: true }),
     'GET /api/status': (req, res) => json(res, 200, session.status()),
     'POST /api/connect': async (req, res) => json(res, 200, await session.connect(await readJson(req))),
@@ -71,6 +104,32 @@ function apiRoutes(session) {
       json(res, 200, normalizeControls(await session.call((c) => c.getControls(name))));
     },
   };
+}
+
+// Parameterised routes: [method, regex, handler(req, res, url, ...groups)].
+function paramRoutes(session) {
+  return [
+    // S1 — components for a role's dropdown, filtered by typeMatch; ?all=1 = "show all".
+    ['GET', /^\/api\/roles\/([^/]+)\/candidates$/, async (req, res, url, roleId) => {
+      const role = Object.prototype.hasOwnProperty.call(ROLES, roleId) ? ROLES[roleId] : null;
+      if (!role) throw new SessionError(`Unknown role "${roleId}"`, 404);
+      const all = normalizeComponents(await session.call((c) => c.getComponents()));
+      const showAll = url.searchParams.get('all') === '1';
+      const components = (showAll ? all : all.filter((c) => role.typeMatch.test(c.type || '')))
+        .map(({ name, type, properties }) => ({ name, type, properties }));
+      json(res, 200, { role: role.id, all: showAll, components });
+    }],
+  ];
+}
+
+function findRoute(routes, params, method, pathname) {
+  const exact = routes[`${method} ${pathname}`];
+  if (exact) return (req, res, url) => exact(req, res, url);
+  for (const [m, re, fn] of params) {
+    const hit = m === method && re.exec(pathname);
+    if (hit) return (req, res, url) => fn(req, res, url, ...hit.slice(1).map(decodeURIComponent));
+  }
+  return null;
 }
 
 // --- static file serving -----------------------------------------------------
@@ -96,12 +155,13 @@ function serveStatic(req, res, urlPath) {
   });
 }
 
-function createApp({ qrcTimeoutMs, keepaliveMs } = {}) {
+function createApp({ qrcTimeoutMs, keepaliveMs, rigPath = DEFAULT_RIG_PATH } = {}) {
   const session = new Session({ timeoutMs: qrcTimeoutMs, keepaliveMs });
-  const routes = apiRoutes(session);
+  const routes = apiRoutes(session, rigPath);
+  const params = paramRoutes(session);
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
-    const route = routes[`${req.method} ${url.pathname}`];
+    const route = findRoute(routes, params, req.method, url.pathname);
     if (route) {
       try {
         await route(req, res, url);

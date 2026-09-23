@@ -131,8 +131,9 @@ Flex input — type `io_card_flex_in_core_8flex` (8 ch)
 ---
 
 ## Resume notes
-1. The v2 plan is in TASKS.md. Start at **S1** (no deps). The contracts at the top
+1. The v2 plan is in TASKS.md. S1 is done → next is **S2**. The contracts at the top
    of TASKS are fixed; change them only by editing both files.
-2. `npm test` is 51 green before S1; S1 deletes `test-gain-model.js` (−11).
+2. `npm test` is 59 green after S1. Tests pass `rigPath` to `createApp` so they
+   never touch the repo's `rig.json`.
 3. Emulation: `127.0.0.1:1710`, design = `200ms_Acoustic_Echo_Canceler` +
    `Flex_In_Core-1`. Server: `node server.js` (:8080; `PORT=` to override).

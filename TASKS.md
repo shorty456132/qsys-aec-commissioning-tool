@@ -54,27 +54,6 @@ Finding = { id, level: 'ok'|'warn'|'bad', text,
 
 ## To Do
 
-**S1 — New shell + Setup tab with an AEC stage** *(no deps)*
-Replace the v1 UI with the Setup / Monitor tabs. Setup = the connection panel
-plus a chain editor that has one stage so far, **AEC**: a dropdown of
-components matching the role's `typeMatch` (with a "show all" toggle), and a
-channel picker. Save to `rig.json`.
-Delete the simulator (`gain-model.js`, `test-gain-model.js`, v1 markup/JS
-in `public/`). The v1 HTML stays in the repo root, not served (ADR-09).
-Tests first:
-- `GET /api/rig` with no file → the default rig (1 empty chain, empty field)
-- `PUT /api/rig` validates: unknown role key → 400; bad channel → 400;
-  round-trips; written to `rig.json`; survives an app restart
-- `GET /api/roles/aec/candidates` → only components whose Type matches
-  (fixture: `acoustic_echo_canceler_simd`); `?all=1` → every component;
-  not connected → 409
-- `roles.js`: AEC role `meters({channel:1})` → `channel.1.ref.mic.ratio`,
-  `channel.1.ERLE`; `knobs` → `channel.1.ref.gain`, `min.ref.level`,
-  `min.mic.level` (CONFIRMED pins)
-- `/` serves the new shell; `gain-model.js` → 404
-Acceptance (emulation): pick `200ms_Acoustic_Echo_Canceler` ch 1 → save →
-restart server → selection still there.
-
 **S2 — Monitor tracer: AEC meters + first finding** *(needs S1)*
 `meters.js`: one change group (`ChangeGroup.AddComponentControl` for every
 meter pin in the rig) → `ChangeGroup.Poll` every 500 ms → a value cache,
@@ -149,7 +128,14 @@ live ranges).
 ## In Progress
 - (none)
 
-## Done (carried from v1 — reused as-is)
+## Done
+- **S1 — New shell + Setup tab with an AEC stage.** `roles.js` (AEC role,
+  `defaultRig`, `validateRig`), `GET/PUT /api/rig` (atomic write; a corrupt
+  file → 500, never silently reset), `GET /api/roles/:id/candidates[?all=1]`,
+  Setup/Monitor shell. Simulator deleted. `createApp({rigPath})` for tests.
+  Emulation acceptance passed at the API level (pick → save → restart → kept).
+
+### Carried from v1 (reused as-is)
 - QRC client `qrc.js` (framing, id matching, connect errors/timeouts) — 13 tests
 - Session `session.js`: one connection, 409 on a second, NoOp check, keepalive
   58 s (ADR-08), `session.call()` → 409/502 — `test-server.js`
@@ -171,3 +157,8 @@ live ranges).
   carries over). Re-scoped to chain-stage setup + Monitor + advisor. Meters
   confirmed static in emulation → fake scripted meters (ADR-13). Field
   readings = seat SPL + noise floor + broadband RT60.
+- **2026-09-22 (S1):** done, `npm test` 59 green. AEC `typeMatch`
+  `/^acoustic_echo_cancel/i`; emulation lists only `200ms_Acoustic_Echo_Canceler`
+  (channel_count "1"). Meter keys are `aec.rmlr` / `aec.erle`, knob keys
+  `aec.refGain|minRef|minMic` → S2 builds on these. The browser UI hasn't
+  been clicked through by hand yet.

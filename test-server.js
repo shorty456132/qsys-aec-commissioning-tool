@@ -23,7 +23,8 @@ async function test(name, fn) {
 // T5 fixtures — documented QRC shapes (QRC_Commands.md).
 const FAKE_COMPONENTS = [
   { ID: 'MyGain', Name: 'MyGain', Type: 'gain', Properties: [], Controls: null, ControlSource: 2 },
-  { ID: 'Room1_AEC', Name: 'Room1_AEC', Type: 'acoustic_echo_canceller', Properties: [], Controls: null, ControlSource: 2 },
+  // S1: CONFIRMED AEC type string (ADR §Pins).
+  { ID: 'Room1_AEC', Name: 'Room1_AEC', Type: 'acoustic_echo_canceler_simd', Properties: [{ Name: 'channel_count', Value: '2' }], Controls: null, ControlSource: 2 },
 ];
 const FAKE_CONTROLS = {
   Room1_AEC: [
@@ -91,11 +92,29 @@ function call(app, method, path, body, raw) {
   });
 }
 
+function getRaw(app, path) {
+  return new Promise((resolve, reject) => {
+    http.get({ host: '127.0.0.1', port: app.address().port, path }, (res) => {
+      let s = '';
+      res.on('data', (c) => (s += c));
+      res.on('end', () => resolve({ code: res.statusCode, type: res.headers['content-type'], text: s }));
+    }).on('error', reject);
+  });
+}
+
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Every app gets its own rig.json in a temp dir — tests never touch the repo's.
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'aec-rig-'));
+let rigN = 0;
+const tmpRigPath = () => path.join(TMP, `rig-${++rigN}.json`);
 
 async function withRig(opts, fn, appOpts) {
   const fake = await startFakeQRC(opts);
-  const app = await startApp(appOpts);
+  const app = await startApp({ rigPath: tmpRigPath(), ...appOpts });
   try {
     await fn(app, fake);
   } finally {
@@ -323,6 +342,111 @@ async function withRig(opts, fn, appOpts) {
     }
   });
 
+  // --- S1: rig persistence (ADR-10) ------------------------------------------
+  const { defaultRig } = require('./roles');
+  const aecRig = () => {
+    const r = defaultRig();
+    r.chains[0].aec = { component: 'Room1_AEC', channel: 1 };
+    return r;
+  };
+
+  await test('GET /api/rig with no file → default rig', async () => {
+    await withRig({}, async (app) => {
+      const r = await call(app, 'GET', '/api/rig');
+      assert.strictEqual(r.code, 200);
+      assert.deepStrictEqual(r.body, defaultRig());
+    });
+  });
+
+  await test('PUT /api/rig round-trips and writes rig.json', async () => {
+    const rigPath = tmpRigPath();
+    await withRig({}, async (app) => {
+      const p = await call(app, 'PUT', '/api/rig', aecRig());
+      assert.strictEqual(p.code, 200, JSON.stringify(p.body));
+      assert.deepStrictEqual(p.body, aecRig());
+      assert.deepStrictEqual((await call(app, 'GET', '/api/rig')).body, aecRig());
+      assert.deepStrictEqual(JSON.parse(fs.readFileSync(rigPath, 'utf-8')), aecRig());
+    }, { rigPath });
+  });
+
+  await test('PUT /api/rig: unknown role key → 400; bad channel → 400; bad JSON → 400; nothing written', async () => {
+    const rigPath = tmpRigPath();
+    await withRig({}, async (app) => {
+      const bad = aecRig();
+      bad.chains[0].subwoofer = { component: 'X', channel: 1 };
+      assert.strictEqual((await call(app, 'PUT', '/api/rig', bad)).code, 400);
+      const badCh = aecRig();
+      badCh.chains[0].aec.channel = 0;
+      assert.strictEqual((await call(app, 'PUT', '/api/rig', badCh)).code, 400);
+      assert.strictEqual((await call(app, 'PUT', '/api/rig', undefined, '{nope')).code, 400);
+      assert.ok(!fs.existsSync(rigPath), 'rejected PUTs never write');
+      assert.deepStrictEqual((await call(app, 'GET', '/api/rig')).body, defaultRig());
+    }, { rigPath });
+  });
+
+  await test('rig survives an app restart', async () => {
+    const rigPath = tmpRigPath();
+    await withRig({}, async (app) => {
+      await call(app, 'PUT', '/api/rig', aecRig());
+    }, { rigPath });
+    await withRig({}, async (app) => {
+      assert.deepStrictEqual((await call(app, 'GET', '/api/rig')).body, aecRig());
+    }, { rigPath });
+  });
+
+  await test('corrupt rig.json → GET 500 with error, not a silent default', async () => {
+    const rigPath = tmpRigPath();
+    fs.writeFileSync(rigPath, '{broken');
+    await withRig({}, async (app) => {
+      const r = await call(app, 'GET', '/api/rig');
+      assert.strictEqual(r.code, 500);
+      assert.ok(/rig\.json|rig-/i.test(r.body.error), r.body.error);
+    }, { rigPath });
+  });
+
+  // --- S1: role candidates ---------------------------------------------------
+  await test('GET /api/roles/aec/candidates → 409 when not connected', async () => {
+    await withRig({}, async (app) => {
+      assert.strictEqual((await call(app, 'GET', '/api/roles/aec/candidates')).code, 409);
+    });
+  });
+
+  await test('GET /api/roles/aec/candidates → only typeMatch components; ?all=1 → every component', async () => {
+    await withRig({}, async (app, fake) => {
+      await call(app, 'POST', '/api/connect', { host: '127.0.0.1', port: fake.port });
+      const r = await call(app, 'GET', '/api/roles/aec/candidates');
+      assert.strictEqual(r.code, 200, JSON.stringify(r.body));
+      assert.strictEqual(r.body.role, 'aec');
+      assert.deepStrictEqual(r.body.components.map((c) => c.name), ['Room1_AEC']);
+      assert.strictEqual(r.body.components[0].properties.channel_count, '2');
+      const all = await call(app, 'GET', '/api/roles/aec/candidates?all=1');
+      assert.deepStrictEqual(all.body.components.map((c) => c.name).sort(), ['MyGain', 'Room1_AEC']);
+    });
+  });
+
+  await test('GET /api/roles/<unknown>/candidates → 404', async () => {
+    await withRig({}, async (app) => {
+      assert.strictEqual((await call(app, 'GET', '/api/roles/subwoofer/candidates')).code, 404);
+    });
+  });
+
+  // --- S1: new shell (ADR-09) ------------------------------------------------
+  await test('/ serves the Setup/Monitor shell; v1 simulator is gone', async () => {
+    const app = await startApp();
+    try {
+      const r = await getRaw(app, '/');
+      assert.strictEqual(r.code, 200);
+      assert.ok(/text\/html/.test(r.type));
+      assert.ok(/id="tab-setup"/.test(r.text) && /id="tab-monitor"/.test(r.text), 'has both tabs');
+      assert.ok(!/gain-model\.js/.test(r.text), 'no simulator script');
+      assert.strictEqual((await getRaw(app, '/gain-model.js')).code, 404);
+      assert.strictEqual((await getRaw(app, '/aec-erl-rmlr-emulator-v1.html')).code, 404, 'v1 reference not served');
+    } finally {
+      await new Promise((r) => app.close(r));
+    }
+  });
+
+  fs.rmSync(TMP, { recursive: true, force: true });
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);
 })().catch((e) => {

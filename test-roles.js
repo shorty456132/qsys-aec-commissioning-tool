@@ -1,0 +1,101 @@
+'use strict';
+// S1 — Role registry (ADR-10) + rig validation. Pure, no sockets.
+// Run: node test-roles.js
+
+const assert = require('assert');
+const { ROLES, STAGES, defaultRig, validateRig } = require('./roles');
+
+let passed = 0;
+let failed = 0;
+function test(name, fn) {
+  try {
+    fn();
+    passed++;
+    console.log(`  ok  ${name}`);
+  } catch (e) {
+    failed++;
+    console.error(` FAIL  ${name}\n      ${e.message}`);
+  }
+}
+
+test('AEC role: typeMatch accepts the CONFIRMED type, rejects others', () => {
+  const r = ROLES.aec;
+  assert.ok(r.typeMatch.test('acoustic_echo_canceler_simd'));
+  assert.ok(!r.typeMatch.test('gain'));
+  assert.ok(!r.typeMatch.test('io_card_flex_in_core_8flex'));
+});
+
+test('AEC role: meters({channel:1}) → RMLR + ERLE pins (CONFIRMED)', () => {
+  const m = ROLES.aec.meters({ component: 'X', channel: 1 });
+  assert.deepStrictEqual(m.map((x) => x.pin), ['channel.1.ref.mic.ratio', 'channel.1.ERLE']);
+  const [rmlr, erle] = m;
+  assert.deepStrictEqual([rmlr.key, rmlr.unit, rmlr.lo, rmlr.hi], ['aec.rmlr', 'dB', -10, 10]);
+  assert.deepStrictEqual([erle.key, erle.unit, erle.lo, erle.hi], ['aec.erle', 'dB', 0, 20]);
+  assert.ok(!/ELR/.test(erle.label.replace('ERLE', '')), 'ERLE is never labelled ELR (ADR-07)');
+});
+
+test('AEC role: meters follow the channel', () => {
+  assert.strictEqual(ROLES.aec.meters({ component: 'X', channel: 3 })[0].pin, 'channel.3.ref.mic.ratio');
+});
+
+test('AEC role: knobs → ref.gain, min.ref.level, min.mic.level (CONFIRMED)', () => {
+  const k = ROLES.aec.knobs({ component: 'X', channel: 2 });
+  assert.deepStrictEqual(k.map((x) => x.pin), ['channel.2.ref.gain', 'min.ref.level', 'min.mic.level']);
+  assert.deepStrictEqual([k[0].lo, k[0].hi], [-40, 0]);
+  assert.deepStrictEqual([k[1].lo, k[1].hi], [-100, 0]);
+});
+
+test('defaultRig → one empty chain, empty field', () => {
+  const r = defaultRig();
+  assert.strictEqual(r.chains.length, 1);
+  const c = r.chains[0];
+  assert.ok(c.id && c.label);
+  for (const s of STAGES) assert.strictEqual(c[s], null, s);
+  assert.deepStrictEqual(c.mixer, []);
+  assert.deepStrictEqual(r.field, { seatSpl: [], noiseFloor: null, rt60: null });
+  assert.notStrictEqual(defaultRig(), defaultRig(), 'fresh object each call');
+});
+
+test('validateRig: default rig and an AEC selection pass, normalized', () => {
+  assert.deepStrictEqual(validateRig(defaultRig()), defaultRig());
+  const r = defaultRig();
+  r.chains[0].aec = { component: '200ms_Acoustic_Echo_Canceler', channel: 1 };
+  assert.deepStrictEqual(validateRig(r).chains[0].aec, { component: '200ms_Acoustic_Echo_Canceler', channel: 1 });
+});
+
+test('validateRig: missing stages/field default in', () => {
+  const v = validateRig({ chains: [{ id: 'c1', label: 'Mic 1', aec: { component: 'A', channel: 2 } }] });
+  assert.strictEqual(v.chains[0].input, null);
+  assert.deepStrictEqual(v.chains[0].mixer, []);
+  assert.deepStrictEqual(v.field, defaultRig().field);
+});
+
+function throws400(rig, re) {
+  assert.throws(() => validateRig(rig), (e) => e.httpCode === 400 && re.test(e.message));
+}
+
+test('validateRig: unknown role key → 400', () => {
+  const r = defaultRig();
+  r.chains[0].subwoofer = { component: 'X', channel: 1 };
+  throws400(r, /subwoofer/);
+});
+
+test('validateRig: bad channel → 400 (0, negative, fraction, string, missing)', () => {
+  for (const channel of [0, -1, 1.5, '1', undefined]) {
+    const r = defaultRig();
+    r.chains[0].aec = { component: 'A', channel };
+    throws400(r, /channel/);
+  }
+});
+
+test('validateRig: bad component / shape → 400', () => {
+  const r = defaultRig();
+  r.chains[0].aec = { component: '', channel: 1 };
+  throws400(r, /component/);
+  throws400({ chains: 'nope' }, /chains/);
+  throws400(null, /object/);
+  throws400({ chains: [] }, /chain/);
+});
+
+console.log(`\n${passed} passed, ${failed} failed`);
+process.exit(failed ? 1 : 0);
