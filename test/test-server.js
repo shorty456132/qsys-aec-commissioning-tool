@@ -726,6 +726,28 @@ async function withRig(opts, fn, appOpts) {
     }, FAST);
   });
 
+  // --- Shutdown: closing the app server ends its QRC connection (ADR-03) ------------
+  await test('app.close() disconnects the Core session and stops the poller — no socket left open', async () => {
+    const fake = await startFakeQRC();
+    const app = await startApp({ rigPath: tmpRigPath(), pollMs: 30 });
+    try {
+      await call(app, 'PUT', '/api/rig', aecRig());
+      await connect(app, fake);
+      await wait(100);
+      assert.strictEqual(fake.socks.size, 1, 'connected');
+      await new Promise((r) => app.close(r)); // no session.disconnect() first
+      await wait(100);
+      assert.strictEqual(fake.socks.size, 0, 'Core socket closed with the app');
+      assert.strictEqual(app.session.state, 'disconnected');
+      const polls = countOf(fake, 'ChangeGroup.Poll');
+      await wait(100);
+      assert.strictEqual(countOf(fake, 'ChangeGroup.Poll'), polls, 'poller stopped');
+    } finally {
+      for (const s of fake.socks) s.destroy();
+      fake.srv.close();
+    }
+  });
+
   // --- S1: new shell (ADR-09) ------------------------------------------------
   await test('/ serves the Setup/Monitor shell; v1 simulator is gone', async () => {
     const app = await startApp();

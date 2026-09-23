@@ -197,6 +197,14 @@ function createApp({ qrcTimeoutMs, keepaliveMs, pollMs, rigPath = DEFAULT_RIG_PA
     }
     serveStatic(req, res, url.pathname);
   });
+  // The QRC session lives only as long as the app (ADR-03): closing the server
+  // drops the Core socket; disconnect → onState stops the poller + keepalive.
+  const closeHttp = server.close.bind(server);
+  server.close = (cb) => {
+    session.disconnect();
+    server.closeAllConnections(); // the browser's keep-alive polls would hold close open
+    return closeHttp(cb);
+  };
   server.session = session;
   server.poller = poller;
   return server;
@@ -207,6 +215,9 @@ if (require.main === module) {
   server.listen(PORT, () => {
     console.log(`AEC commissioning tool: http://localhost:${PORT}`);
   });
+  const shutdown = () => server.close(() => process.exit(0));
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
 }
 
 module.exports = { createApp };
