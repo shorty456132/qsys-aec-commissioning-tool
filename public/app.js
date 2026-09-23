@@ -75,14 +75,16 @@
     refreshStatus();
   });
 
-  // --- chain editor: one row per stage (S1 AEC, S3 input, S5 output) ----------------
+  // --- chain editor: one row per stage (S1 AEC, S3 input, S5 output, S7 automixer) ---
   // Each row has #<role>-comp, #<role>-ch and #<role>-all; the role id is the chain key.
-  const STAGE_ROLES = ['input', 'aec', 'output'];
+  const STAGE_ROLES = ['input', 'aec', 'automixer', 'output'];
   const chain = () => rig.chains[0];
 
+  // AEC: channel_count; gating automixer: n_channels (CONFIRMED); Flex: neither.
   function channelCount(role, name) {
     const c = candidates[role].find((x) => x.name === name);
-    const n = c && parseInt(c.properties && c.properties.channel_count, 10);
+    const p = (c && c.properties) || {};
+    const n = parseInt(p.channel_count || p.n_channels, 10);
     return n > 0 ? n : FALLBACK_CHANNELS;
   }
 
@@ -316,10 +318,26 @@
     }).join('');
   }
 
+  // S7 — gate card: signal-above-noise bar with the threshold marked; amber when
+  // at or under the threshold (the talker's gate wouldn't open). Mute/Manual noted.
+  function renderAutomixerCard(byKey) {
+    const snr = byKey('automixer.snr');
+    const thr = byKey('automixer.threshold');
+    const t = thr && thr.value !== null && !thr.stale ? thr.value : null;
+    renderMeter($('mon-automixer'), snr, { warn: (v) => t !== null && v <= t });
+    const mark = $('mon-am-thr');
+    mark.style.display = t === null ? 'none' : '';
+    if (t !== null) mark.style.left = Math.min(100, Math.max(0, t / 50 * 100)) + '%';
+    const on = (k) => { const m = byKey(k); return !!(m && !m.stale && m.value !== null && m.value >= 0.5); };
+    $('mon-am-open').classList.toggle('on', on('automixer.open'));
+    const flags = [t !== null && 'threshold ' + t.toFixed(1) + ' dB', on('automixer.mute') && 'post-gate muted', on('automixer.manual') && 'manual'].filter(Boolean);
+    $('mon-am-flags').textContent = snr ? flags.join(' · ') : 'No automixer set — pick one on the Setup tab.';
+  }
+
   function renderMonitor(s) {
     const where = s.error ? ' <span class="err">(' + esc(s.error) + ')</span>' : '';
     $('mon-status').innerHTML = '<i style="background:' + (COLORS[s.state] || COLORS.disconnected) + '"></i><span>' +
-      esc(s.state) + where + (s.meters.length ? '' : ' — no metered stage set; pick an input, AEC, mixer crosspoint or output on the Setup tab') + '</span>';
+      esc(s.state) + where + (s.meters.length ? '' : ' — no metered stage set; pick an input, AEC, automixer, mixer crosspoint or output on the Setup tab') + '</span>';
     const byKey = (k) => s.meters.find((m) => m.key === k);
     renderMeter($('mon-input'), byKey('input.level'), { lo: -60, hi: 0, warn: (v) => v > -3 });
     const clip = byKey('input.clip');
@@ -327,6 +345,7 @@
     renderMeter($('mon-rmlr'), byKey('aec.rmlr'), { centred: true, warn: (v) => Math.abs(v) > 3 });
     renderMeter($('mon-erle'), byKey('aec.erle'));
     renderMeter($('mon-output'), byKey('output.level'), { lo: -60, hi: 0, warn: (v) => v > -3 });
+    renderAutomixerCard(byKey);
     renderMixerCard(byKey);
     // S5 — ELR is derived server-side; `needs` says why there's no value yet.
     const elr = s.derived && s.derived.elr && s.derived.elr[0];

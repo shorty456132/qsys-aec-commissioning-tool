@@ -61,10 +61,6 @@ Finding = { id, level: 'ok'|'warn'|'bad', text,
 
 ## To Do
 
-**S7 — Gating automixer** *(needs S2)*
-Role + channel; gate/level meters; rules TBD from pins + docs.
-`NEEDS-TEST:` automixer type + pins; find docs before writing any rule.
-
 **S8 — Mic gain block** *(needs S2)*
 Role (Gain component) + gain/mute; included in the talker-window advice so
 the fix names the right stage (input gain vs gain block).
@@ -84,6 +80,13 @@ live ranges).
 - (none)
 
 ## Done
+- **S7 — Gating automixer.** `automixer` role (`/^auto_mixer_gating_adaptive$/`;
+  `channel.N.open|snr|post.gate.mute|manual` + shared `config.minimum.snr`).
+  Rules (doc: component help): talker snr ≤ threshold → warn lower threshold
+  (snr at 0 floor → "no signal, check mic/input"); quiet snr > threshold → warn
+  raise; post-gate mute → warn (any mode); Manual → ok note, gate rule skipped.
+  Open LED not ruled on (Last Mic On). Setup row + Monitor gate card. Emulation
+  acceptance passed. `NEEDS-TEST:` other automixer types → "show all".
 - **S6 — Mixer crosspoints.** `mixer` role (`/^mixer$/`); per crosspoint
   the poller reads `input.I.output.O.gain` + `input.I.mute` + `output.O.mute`
   (the mixer has no meters). Crosspoint `feedsRef` flag (contract updated);
@@ -188,3 +191,8 @@ live ranges).
   mixer mutes Poll as 0/1 ("unmuted"); `Component.Set` moves emulation controls
   and Poll reports them. `meterList` walks `chainSelections()`; poller dedupes pins.
   UI not clicked through by hand yet.
+- **2026-09-23 (S7):** done, `npm test` 147 green. AEC docs say nothing on
+  automixers → rules cite the component help page. CONFIRMED: `config.LMO.enable`
+  defaults true (so no "open in quiet room" rule); `n_channels` is the channel
+  count prop (UI reads it); Set on mute/manual/threshold → Poll 0/1 + value.
+  Contract unchanged. UI not clicked through by hand yet.

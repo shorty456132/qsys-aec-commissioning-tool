@@ -219,6 +219,46 @@ test('validateRig mixer: bad crosspoint → 400 (in/out, component, feedsRef, du
   throws400(withMixer({ ...XP }), /mixer must be an array/);
 });
 
+// --- S7: gating automixer ---------------------------------------------------------
+test('automixer role: typeMatch accepts the CONFIRMED gating (relative threshold) type only', () => {
+  const r = ROLES.automixer;
+  assert.ok(r.typeMatch.test('auto_mixer_gating_adaptive'));
+  assert.ok(!r.typeMatch.test('mixer'));
+  assert.ok(!r.typeMatch.test('auto_mixer_gated'), 'absolute-threshold gating mixer: pins unconfirmed → show all');
+  assert.ok(!r.typeMatch.test('auto_mixer'));
+});
+
+test('automixer role: meters({channel:3}) → open, signal above noise, threshold, post-gate mute, manual (CONFIRMED)', () => {
+  const m = ROLES.automixer.meters({ component: 'X', channel: 3 });
+  assert.deepStrictEqual(m.map((x) => [x.key, x.pin]), [
+    ['automixer.open', 'channel.3.open'],
+    ['automixer.snr', 'channel.3.snr'],
+    ['automixer.threshold', 'config.minimum.snr'],
+    ['automixer.mute', 'channel.3.post.gate.mute'],
+    ['automixer.manual', 'channel.3.manual'],
+  ]);
+  const by = Object.fromEntries(m.map((x) => [x.key, x]));
+  assert.deepStrictEqual([by['automixer.snr'].unit, by['automixer.snr'].lo, by['automixer.snr'].hi], ['dB', 0, 50]);
+  assert.deepStrictEqual([by['automixer.threshold'].lo, by['automixer.threshold'].hi], [0, 50]);
+  for (const k of ['automixer.open', 'automixer.mute', 'automixer.manual']) assert.deepStrictEqual([by[k].lo, by[k].hi], [0, 1], k);
+});
+
+test('automixer role: knobs → threshold (shared), post-gate mute, manual (CONFIRMED)', () => {
+  const k = ROLES.automixer.knobs({ component: 'X', channel: 2 });
+  assert.deepStrictEqual(k.map((x) => [x.key, x.pin]), [
+    ['automixer.threshold', 'config.minimum.snr'],
+    ['automixer.mute', 'channel.2.post.gate.mute'],
+    ['automixer.manual', 'channel.2.manual'],
+  ]);
+  assert.deepStrictEqual([k[0].label, k[0].lo, k[0].hi], ['Threshold Level Above Noise', 0, 50]);
+});
+
+test('validateRig: an automixer selection round-trips', () => {
+  const r = defaultRig();
+  r.chains[0].automixer = { component: 'Gating_Automatic_Mic_Mixer', channel: 4 };
+  assert.deepStrictEqual(validateRig(r).chains[0].automixer, { component: 'Gating_Automatic_Mic_Mixer', channel: 4 });
+});
+
 test('chainSelections: signal order input → micGain → aec → automixer → mixer[] → output, unset stages skipped', () => {
   const r = withMixer([XP, { ...XP, out: 2 }]);
   const c = r.chains[0];

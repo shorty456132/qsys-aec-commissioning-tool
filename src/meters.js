@@ -19,7 +19,7 @@ function meterList(rig) {
   for (const chain of rig.chains) {
     for (const [stage, sel] of chainSelections(chain)) {
       const role = ROLES[stage];
-      if (!role) continue; // stage without a role yet (micGain, automixer)
+      if (!role) continue; // stage without a role yet (micGain)
       for (const m of role.meters(sel)) out.push({ chain: chain.id, role: role.id, component: sel.component, ...m });
     }
   }

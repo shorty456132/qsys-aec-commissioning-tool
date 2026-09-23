@@ -4,6 +4,7 @@
 // S3 — advise(rig, values, { mode }): mode picks the input rule (talker/quiet).
 // S4 — + { props }: design properties for the RT60-vs-tail rule; the field
 // rules (seat SPL, acoustic SNR) read rig.field and need no meters.
+// S7 — automixer gate vs threshold (talker/quiet) + post-gate mute.
 // `values` = { [chainId]: { [meterKey]: number } }, fresh values only — the
 // caller leaves stale meters out, so there's never advice on stale data.
 // Every finding names its trigger, the control(s) to turn and its source.
@@ -153,6 +154,48 @@ function refCrosspointRule(chain, x, values) {
   }];
 }
 
+// S7 — gating automixer (doc: Schematic_Library-auto_mixer_gating_adaptive.md).
+// A gate opens when the signal "exceeds the noise floor by" the Threshold Level
+// Above Noise; the Signal Level Above Noise meter is the doc's aid for setting
+// it. So talker: snr must exceed the threshold; quiet room: it must not. The
+// Open LED isn't used — Last Mic On (default on) holds the last mic open in a
+// silent room by design. Post-Gate Mute takes the mic out of the mix and its
+// direct out (any mode); Manual bypasses the gate (always mixed).
+const AUTOMIX_DOC = 'doc:Schematic_Library-auto_mixer_gating_adaptive.md';
+const SNR_FLOOR_DB = 0; // the snr meter's minimum (CONFIRMED 0…50)
+
+function automixerMuteRule(chain, v) {
+  if (!chain.automixer || typeof v !== 'number' || v < 0.5) return [];
+  const m = knob(chain, 'automixer', 'automixer.mute');
+  return [{
+    id: `${chain.id}:automixer.mute`, level: 'warn', trigger: { key: 'automixer.mute', value: v }, source: AUTOMIX_DOC,
+    text: `Automixer channel ${chain.automixer.channel} is post-gate muted — it's out of the mix and its direct output, so the far end won't hear this mic. Turn off ${m.label} (${m.pin}) on ${m.component} unless the mute is intended.`,
+    adjust: [m],
+  }];
+}
+
+function automixerGateRule(chain, values, mode) {
+  if (!chain.automixer || (mode !== 'talker' && mode !== 'quiet')) return [];
+  const [snr, thr, mute, manual] = ['snr', 'threshold', 'mute', 'manual'].map((k) => values[`automixer.${k}`]);
+  if (![snr, thr, mute, manual].every((v) => typeof v === 'number') || mute >= 0.5) return [];
+  const ch = `Automixer channel ${chain.automixer.channel}`;
+  const f = (level, text, adjust = []) => [{
+    id: `${chain.id}:automixer.gate`, level, trigger: { key: 'automixer.snr', value: snr }, source: AUTOMIX_DOC, text, adjust,
+  }];
+  if (manual >= 0.5) return f('ok', `${ch} is in Manual — always mixed, the gate is bypassed and it's left out of NOM.`);
+  const t = knob(chain, 'automixer', 'automixer.threshold');
+  const at = (dir, v) => `${dir} ${t.label} (${t.pin}) on ${t.component} ${dir === 'Lower' ? 'below' : 'above'} ${fmtDb(v)} — it applies to every channel.`;
+  const read = `signal ${fmtDb(snr)} above noise vs threshold ${fmtDb(thr)}`;
+  if (mode === 'talker') {
+    if (snr > thr) return f('ok', `${ch} gate opens for the talker (${read}).`);
+    // At the meter floor there's nothing to open on — a threshold move can't help.
+    if (snr <= SNR_FLOOR_DB) return f('warn', `${ch} sees no signal above noise with a talker speaking — check the mic and the input stage before touching the gate.`);
+    return f('warn', `${ch} gate won't open for the talker (${read}). ${at('Lower', snr)}`, [t]);
+  }
+  if (snr <= thr) return f('ok', `${ch} gate stays shut on room noise (${read}).`);
+  return f('warn', `Room noise opens ${ch.toLowerCase()}'s gate (${read}). ${at('Raise', snr)}`, [t]);
+}
+
 // S4 — field readings (rig.field). These need no meters, so they apply with or
 // without a Core. S5: with an output stage set, a one-way seat finding names
 // its gain knob; otherwise the adjustment lives in the text only.
@@ -238,6 +281,8 @@ function advise(rig, values, { mode = 'off', props = null } = {}) {
     out.push(...levelRule(chain, v['input.level'], mode));
     out.push(...rmlrRule(chain, v['aec.rmlr']));
     out.push(...tailRule(chain, field.rt60, props));
+    out.push(...automixerMuteRule(chain, v['automixer.mute']));
+    out.push(...automixerGateRule(chain, v, mode));
     for (const x of chain.mixer || []) out.push(...refCrosspointRule(chain, x, v));
     out.push(...outputPeakRule(chain, v['output.level']));
     out.push(...elrRule(chain, v, mode));

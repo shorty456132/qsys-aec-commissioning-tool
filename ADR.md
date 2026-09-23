@@ -128,14 +128,23 @@ Mixer (2026-09-23) — type `mixer` (props `n_inputs`, `n_outputs`, `crosspoint_
 Also `input.N.gain|trim|solo|invert`, `output.N.gain|invert`. The AEC-ref crosspoint
 is tagged by the tech (`feedsRef`) — QRC can't see wiring (ADR-10).
 
-Types seen, pins not mapped: `auto_mixer_gating_adaptive` (S7),
-`meter2`, `spaq_amplifier` — re-read their controls in their slice.
+Gating automixer (2026-09-23) — type `auto_mixer_gating_adaptive` (props `n_channels`, `output_choice`, `sidechain_filter`, `show_advanced_controls`)
+| Pin | Type / dir | Range | Role |
+|---|---|---|---|
+| `channel.N.open` | Bool RO | — | Gate open LED |
+| `channel.N.snr` | Float RO | 0…50 dB | "Signal Level Above Noise" |
+| `config.minimum.snr` | Float RW | 0…50 dB | "Threshold Level Above Noise" (all channels) |
+| `channel.N.post.gate.mute` / `channel.N.manual` | Bool RW | — | Post-Gate Mute / Manual (**Poll → 0/1**) |
+Also `channel.N.default.mic|post.gate.gain`, `config.LMO.enable` (default **true**),
+`config.depth|hold.time|NOM*`, `output.1.gain|mute`.
+
+Types seen, pins not mapped: `meter2`, `spaq_amplifier` — re-read their controls in their slice.
 
 - `NEEDS-TEST:` RMLR sign convention (does +ve mean ref hotter than mic?) —
   needs a Core with audio.
 - `NEEDS-TEST:` that `digital.input.level` reads dBFS (0 = full scale) on a
   live Core. The input rules assume it does (S10).
-- `NEEDS-TEST:` pins for Gating Automixer, Gain; the crosspoint mute pin
+- `NEEDS-TEST:` pins for Gain; other automixer types; the crosspoint mute pin
   (only when `crosspoint_mute` = "True"); type + pins for Dante Rx/Tx (check
   each in emulation in its own slice).
 
@@ -153,14 +162,15 @@ Types seen, pins not mapped: `auto_mixer_gating_adaptive` (S7),
 | Hold thresholds | −100 default; raise to muted-mic level if mics only attenuate | doc: `AEC_Troubleshooting.md` |
 | RT60 vs tail length | RT60 > `tail_length` → suggest a longer tail (each step doubles DSP) | doc says "increase if reverberant"; the comparison is heuristic |
 | ELR (derived) | < 6 dB warn | heuristic (v1) |
+| Automixer gate | talker: snr > threshold; quiet: snr ≤ threshold; post-gate mute warn | doc: `Schematic_Library-auto_mixer_gating_adaptive.md` ("must exceed the noise floor by" the threshold) |
 
 ---
 
 ## Resume notes
-1. The v2 plan is in TASKS.md. S1–S6 are done → next is **S7** (S8, S9 also
-   only need S2). The contracts at the top of TASKS are fixed; change them only
+1. The v2 plan is in TASKS.md. S1–S7 are done → next is **S8** (S9 also
+   only needs S2). The contracts at the top of TASKS are fixed; change them only
    by editing both files.
-2. `npm test` is 134 green after S6. The Setup stage editor in `app.js` is
+2. `npm test` is 147 green after S7. The Setup stage editor in `app.js` is
    generic: add a role id to `STAGE_ROLES` + a `data-role` row in the HTML. Tests pass `rigPath` (and `pollMs: 30`) to
    `createApp` so they never touch the repo's `rig.json`. A new metered role
    only needs `roles.js` `meters()` — `meterList` (via `chainSelections`) + the

@@ -37,6 +37,27 @@ const ROLES = {
       { key: 'aec.minMic', pin: 'min.mic.level', label: 'Hold If Mic Level Below', lo: -100, hi: 0 },
     ],
   },
+  // S7. Gating Automatic Mic Mixer (relative threshold) — pins CONFIRMED, Core 24f.
+  // `snr` = "Signal Level Above Noise" (per channel); `config.minimum.snr` =
+  // "Threshold Level Above Noise", one setting for every channel. Booleans Poll
+  // as 0/1 like the Flex clip. Other automixer types → "show all" (NEEDS-TEST).
+  automixer: {
+    id: 'automixer',
+    label: 'Automixer',
+    typeMatch: /^auto_mixer_gating_adaptive$/i, // CONFIRMED: auto_mixer_gating_adaptive
+    meters: ({ channel }) => [
+      { key: 'automixer.open', pin: `channel.${channel}.open`, label: 'Gate open', unit: '', lo: 0, hi: 1 },
+      { key: 'automixer.snr', pin: `channel.${channel}.snr`, label: 'Signal above noise', unit: 'dB', lo: 0, hi: 50 },
+      { key: 'automixer.threshold', pin: 'config.minimum.snr', label: 'Threshold above noise', unit: 'dB', lo: 0, hi: 50 },
+      { key: 'automixer.mute', pin: `channel.${channel}.post.gate.mute`, label: 'Post-gate mute', unit: '', lo: 0, hi: 1 },
+      { key: 'automixer.manual', pin: `channel.${channel}.manual`, label: 'Manual', unit: '', lo: 0, hi: 1 },
+    ],
+    knobs: ({ channel }) => [
+      { key: 'automixer.threshold', pin: 'config.minimum.snr', label: 'Threshold Level Above Noise', lo: 0, hi: 50 },
+      { key: 'automixer.mute', pin: `channel.${channel}.post.gate.mute`, label: 'Post-Gate Mute', lo: 0, hi: 1 },
+      { key: 'automixer.manual', pin: `channel.${channel}.manual`, label: 'Manual', lo: 0, hi: 1 },
+    ],
+  },
   // S5. Flex Out + Line Out share these pins (CONFIRMED, Core 24f). Dante Tx → "show all" (NEEDS-TEST).
   output: {
     id: 'output',
@@ -58,7 +79,7 @@ const ROLES = {
   mixer: {
     id: 'mixer',
     label: 'Mixer crosspoint',
-    typeMatch: /^mixer$/i, // CONFIRMED: mixer (gating automixer is auto_mixer_gating_adaptive → S7)
+    typeMatch: /^mixer$/i, // CONFIRMED: mixer (not the gating automixer, S7)
     meters: (x) => {
       const k = crosspointKey(x);
       const at = `In ${x.in} → Out ${x.out}`;

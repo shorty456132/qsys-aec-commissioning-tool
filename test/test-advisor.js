@@ -403,5 +403,92 @@ test('advise mixer: two ref crosspoints → two findings with unique ids', () =>
   assert.strictEqual(f[1].adjust[0].pin, 'input.2.output.8.gain');
 });
 
+// --- S7: gating automixer ------------------------------------------------------------
+const AM = { component: 'Gating_Automatic_Mic_Mixer', channel: 2 };
+const AM_DOC = 'doc:Schematic_Library-auto_mixer_gating_adaptive.md';
+const amRig = () => {
+  const r = defaultRig();
+  r.chains[0].aec = { component: 'Room1_AEC', channel: 1 };
+  r.chains[0].automixer = { ...AM };
+  return r;
+};
+const amVals = (o = {}) => ({ 'automixer.open': 0, 'automixer.snr': 20, 'automixer.threshold': 10, 'automixer.mute': 0, 'automixer.manual': 0, ...o });
+const amF = (vals, mode, id) => advise(amRig(), { 'chain-1': vals }, { mode }).filter((f) => f.id === `chain-1:automixer.${id}`);
+const AM_THRESH = { component: AM.component, pin: 'config.minimum.snr', label: 'Threshold Level Above Noise' };
+const AM_MUTE = { component: AM.component, pin: 'channel.2.post.gate.mute', label: 'Post-Gate Mute' };
+
+test('meterList: automixer sits after the AEC and before crosspoints/output (signal order)', () => {
+  const r = amRig();
+  r.chains[0].output = { component: 'Flex_Out_Core-1', channel: 1 };
+  const roles = meterList(r).map((x) => x.role);
+  assert.deepStrictEqual(roles, ['aec', 'aec', 'automixer', 'automixer', 'automixer', 'automixer', 'automixer', 'output']);
+});
+
+test('advise automixer talker: signal above noise > threshold → ok; ≤ threshold → warn lower the threshold', () => {
+  const [ok] = amF(amVals({ 'automixer.snr': 10.1, 'automixer.open': 1 }), 'talker', 'gate');
+  assert.strictEqual(ok.level, 'ok');
+  assert.deepStrictEqual(ok.adjust, []);
+  assert.strictEqual(ok.source, AM_DOC);
+  for (const snr of [10, 4]) {
+    const [f] = amF(amVals({ 'automixer.snr': snr }), 'talker', 'gate');
+    assert.strictEqual(f.level, 'warn', String(snr));
+    assert.deepStrictEqual(f.trigger, { key: 'automixer.snr', value: snr });
+    assert.deepStrictEqual(f.adjust, [AM_THRESH]);
+    assert.ok(/lower/i.test(f.text) && /config\.minimum\.snr/.test(f.text) && /10\.0 dB/.test(f.text), f.text);
+    assert.ok(/every channel/i.test(f.text), 'threshold is shared: ' + f.text);
+  }
+});
+
+test('advise automixer talker: snr at the 0 dB floor → warn no signal (check upstream), no threshold advice (seen in emulation)', () => {
+  const [f] = amF(amVals({ 'automixer.snr': 0, 'automixer.threshold': 0 }), 'talker', 'gate');
+  assert.strictEqual(f.level, 'warn');
+  assert.deepStrictEqual(f.adjust, []);
+  assert.ok(/no signal/i.test(f.text) && /input/i.test(f.text), f.text);
+  assert.ok(!/lower/i.test(f.text), f.text);
+});
+
+test('advise automixer quiet: noise above threshold → warn raise the threshold; ≤ threshold → ok (open LED ignored: Last Mic On)', () => {
+  const [f] = amF(amVals({ 'automixer.snr': 12 }), 'quiet', 'gate');
+  assert.strictEqual(f.level, 'warn');
+  assert.deepStrictEqual(f.adjust, [AM_THRESH]);
+  assert.ok(/raise/i.test(f.text) && /config\.minimum\.snr/.test(f.text), f.text);
+  const [ok] = amF(amVals({ 'automixer.snr': 10, 'automixer.open': 1 }), 'quiet', 'gate');
+  assert.strictEqual(ok.level, 'ok', 'open with low noise = Last Mic On, not a fault');
+});
+
+test('advise automixer: off / far-end → no gate finding; a missing value → none', () => {
+  assert.deepStrictEqual(amF(amVals({ 'automixer.snr': 2 }), 'off', 'gate'), []);
+  assert.deepStrictEqual(amF(amVals({ 'automixer.snr': 2 }), 'farend', 'gate'), []);
+  for (const drop of ['automixer.snr', 'automixer.threshold', 'automixer.mute', 'automixer.manual']) {
+    const v = amVals({ 'automixer.snr': 2 });
+    delete v[drop];
+    assert.deepStrictEqual(amF(v, 'talker', 'gate'), [], `no ${drop}`);
+  }
+  assert.deepStrictEqual(advise(defaultRig(), { 'chain-1': amVals() }, { mode: 'talker' }), [], 'no automixer stage');
+});
+
+test('advise automixer: post-gate mute → warn in every mode, names the mute, gate rule skipped', () => {
+  for (const mode of MODES) {
+    const all = advise(amRig(), { 'chain-1': amVals({ 'automixer.mute': 1, 'automixer.snr': 2 }) }, { mode });
+    const [f] = all.filter((x) => x.id === 'chain-1:automixer.mute');
+    assert.strictEqual(f.level, 'warn', mode);
+    assert.deepStrictEqual(f.trigger, { key: 'automixer.mute', value: 1 });
+    assert.deepStrictEqual(f.adjust, [AM_MUTE]);
+    assert.strictEqual(f.source, AM_DOC);
+    assert.ok(/channel\.2\.post\.gate\.mute/.test(f.text) && /mix/i.test(f.text), f.text);
+    assert.deepStrictEqual(all.filter((x) => x.id === 'chain-1:automixer.gate'), [], 'muted → gate moot');
+  }
+  assert.deepStrictEqual(amF(amVals(), 'talker', 'mute'), [], 'unmuted → silent');
+});
+
+test('advise automixer: manual → ok note in talker/quiet (gate bypassed), no threshold advice', () => {
+  for (const mode of ['talker', 'quiet']) {
+    const [f] = amF(amVals({ 'automixer.manual': 1, 'automixer.snr': mode === 'talker' ? 2 : 30 }), mode, 'gate');
+    assert.strictEqual(f.level, 'ok', mode);
+    assert.deepStrictEqual(f.adjust, []);
+    assert.ok(/manual/i.test(f.text) && /always mixed/i.test(f.text), f.text);
+  }
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

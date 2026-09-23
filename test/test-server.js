@@ -828,6 +828,48 @@ async function withRig(opts, fn, appOpts) {
     }, FAST);
   });
 
+  // --- S7: gating automixer -------------------------------------------------------
+  const AMX = 'Gating_Automatic_Mic_Mixer';
+  const amRig = () => {
+    const r = aecRig();
+    r.chains[0].automixer = { component: AMX, channel: 2 };
+    return r;
+  };
+
+  await test('GET /api/roles/automixer/candidates → only the gating automixer, not the matrix mixer', async () => {
+    await withRig({}, async (app, fake) => {
+      await connect(app, fake);
+      const r = await call(app, 'GET', '/api/roles/automixer/candidates');
+      assert.strictEqual(r.code, 200, JSON.stringify(r.body));
+      assert.deepStrictEqual(r.body.components.map((c) => c.name), [AMX]);
+    });
+  });
+
+  await test('monitor: automixer pins polled; talker below threshold → warn; threshold lowered → ok', async () => {
+    await withRig({}, async (app, fake) => {
+      assert.strictEqual((await call(app, 'PUT', '/api/rig', amRig())).code, 200);
+      fake.meters = {
+        Room1_AEC: { [RMLR1]: 0, [ERLE1]: 10 },
+        [AMX]: { 'channel.2.open': 0, 'channel.2.snr': 8, 'config.minimum.snr': 10, 'channel.2.post.gate.mute': 0, 'channel.2.manual': 0 },
+      };
+      await connect(app, fake);
+      assert.strictEqual((await call(app, 'PUT', '/api/monitor/mode', { mode: 'talker' })).code, 200);
+      await wait(150);
+      const pins = fake.adds.filter((c) => c.Name === AMX).flatMap((c) => c.Controls.map((x) => x.Name));
+      assert.deepStrictEqual(pins.slice().sort(), ['channel.2.manual', 'channel.2.open', 'channel.2.post.gate.mute', 'channel.2.snr', 'config.minimum.snr']);
+      let s = await monitor(app);
+      assert.strictEqual(s.error, null);
+      assert.strictEqual(meter(s, 'automixer.snr').value, 8);
+      const gate = () => s.findings.find((f) => f.id === 'chain-1:automixer.gate');
+      assert.strictEqual(gate().level, 'warn');
+      assert.strictEqual(gate().adjust[0].pin, 'config.minimum.snr');
+      fake.meters[AMX]['config.minimum.snr'] = 6;
+      await wait(150);
+      s = await monitor(app);
+      assert.strictEqual(gate().level, 'ok');
+    }, FAST);
+  });
+
   // --- S1: new shell (ADR-09) ------------------------------------------------
   await test('/ serves the Setup/Monitor shell; v1 simulator is gone', async () => {
     const app = await startApp();
@@ -851,6 +893,9 @@ async function withRig(opts, fn, appOpts) {
       // S6: crosspoint picker (in × out + feeds-ref flag, add/remove) on Setup; mixer card on Monitor.
       assert.ok(['mixer-comp', 'mixer-in', 'mixer-out', 'mixer-ref', 'mixer-add', 'mixer-list', 'mixer-all'].every((id) => r.text.includes(`id="${id}"`)), 'crosspoint picker');
       assert.ok(/id="mon-mixer"/.test(r.text), 'mixer card');
+      // S7: automixer stage on Setup; gate card on Monitor.
+      assert.ok(/id="automixer-comp"/.test(r.text) && /id="automixer-ch"/.test(r.text) && /id="automixer-all"/.test(r.text), 'automixer stage picker');
+      assert.ok(/id="mon-automixer"/.test(r.text), 'automixer card');
       assert.strictEqual((await getRaw(app, '/gain-model.js')).code, 404);
       assert.strictEqual((await getRaw(app, '/aec-erl-rmlr-emulator-v1.html')).code, 404, 'v1 reference not served');
     } finally {
