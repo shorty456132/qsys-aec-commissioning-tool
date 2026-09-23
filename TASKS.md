@@ -45,7 +45,9 @@ Snapshot = { t, state, error: string|null,       // poll/rebuild/rig error (S2)
              meters: [{ key, chain, role, component, pin, label,
              value, string, unit, lo, hi, stale }], findings: [Finding] }
 
-// Finding — advisor.js, pure: advise(rig, meterValues, {mode}) -> [Finding] (ADR-12)
+// Finding — advisor.js, pure: advise(rig, meterValues, {mode, props}) -> [Finding] (ADR-12)
+//   props (S4) = { [component]: { [property]: string } } from GetComponents on
+//   the live connection (null offline); field findings use trigger.key 'field.*'
 Finding = { id, level: 'ok'|'warn'|'bad', text,
             trigger: { key, value } | null,
             adjust: [{ component, pin, label }],
@@ -56,21 +58,14 @@ Finding = { id, level: 'ok'|'warn'|'bad', text,
 
 ## To Do
 
-**S4 — Field readings** *(needs S2)*
-The Setup tab gets inputs for seat SPL (several positions), noise floor (dB
-SPL) and RT60 (s, broadband), saved in `rig.field`. Rules: seat SPL outside
-65…70 dBA → adjust the amp/output; acoustic SNR (SPL − noise) < 15 dB bad,
-< 25 dB warn; RT60 > AEC `tail_length` property → suggest a longer tail
-(heuristic; note the DSP cost).
-Tests first: validation (numbers, ranges, empty allowed); each rule's edges;
-the tail rule reads `tail_length` from the component properties.
-
 **S5 — Output stage + derived ELR** *(needs S2)*
 Role (line out / Dante out) + output level meter; near-clip rule (> −3
 dBFS); the ELR card becomes output level − mic echo level (ADR-07) once both
 stages are set.
 Tests first: ELR math; ELR < 6 dB → warn; one stage missing → the card keeps
 the "needs …" text. `NEEDS-TEST:` output type strings + pins (emulation).
+Also: fill the S4 seat-SPL finding's `adjust` with the output level knob
+(today it names "amplifier gain or output level" in text only).
 
 **S6 — Mixer crosspoints (monitor 1..n)** *(needs S2)*
 Mixer dropdown → an in × out picker; add or remove several crosspoints;
@@ -102,6 +97,12 @@ live ranges).
 - (none)
 
 ## Done
+- **S4 — Field readings.** Setup panel: seat SPL list (dBA), noise floor
+  (dB SPL), RT60 (s); `validateField` (SPL/noise 0…140, RT60 (0, 20] s,
+  ≤ 32 seats, empty ok). Rules: seat SPL 65…70 (low → raise, high → lower,
+  both → coverage); SNR at the quietest seat < 15 bad, < 25 warn; RT60 >
+  AEC `tail_length` → warn (heuristic). The poller reads design props once per
+  rebuild; they're dropped on disconnect. Emulation acceptance passed (API).
 - **S3 — Input stage (Flex).** `input` role (`/^io_card_flex_in/i`; level,
   clip, knob `input.gain`). Monitor mode Off / Talker test / Quiet room (the
   tech says what's happening; one meter can't tell speech from noise):
@@ -165,3 +166,7 @@ live ranges).
   `Snapshot.mode`. CONFIRMED: Poll returns the clip Bool as 0/1; the Flex has
   no `channel_count` property (UI falls back to 16). Emulation has no Mic/Line
   or Dante component. UI not clicked through by hand yet.
+- **2026-09-23 (S4):** done, `npm test` 105 green. CONFIRMED: `tail_length`
+  is a string in seconds ("0.2"). `advise` gained `{props}` (contract updated)
+  — the poller fetches `GetComponents` on rebuild, so there's no new Rig field. SNR uses the
+  quietest seat. Field findings show offline; the tail rule shows only while connected.

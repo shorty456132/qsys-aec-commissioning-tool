@@ -61,8 +61,10 @@ response is matched by id. CONFIRMED in emulation: the first Poll after
 `AddComponentControl` returns every added pin, so the cache fills without
 `Invalidate`. An unknown component → QRC error 7, shown in the snapshot.
 
-**ADR-12 — Advisor = pure function.** `advise(rig, values) → Finding[]`,
-server-side, unit-tested. Every finding carries its trigger value, the
+**ADR-12 — Advisor = pure function.** `advise(rig, values, {mode, props}) →
+Finding[]`, server-side, unit-tested. Design properties (`props`, S4) come
+from one `GetComponents` per change-group rebuild and are dropped on
+disconnect, so a rule never uses another design's properties. Every finding carries its trigger value, the
 control(s) to adjust, and `source`: `doc:<file>` or `heuristic`, so the tech
 knows which advice is from Q-SYS guidance and which is our own rule of thumb.
 
@@ -101,7 +103,8 @@ Core).
   `qrc.js` assumes no reply. Only matters if write-back leaves the Parking Lot.
 
 ### Pins (CONFIRMED in emulation 2026-09-22; `channel.N` = per channel)
-AEC — type `acoustic_echo_canceler_simd` (props incl. `tail_length`, `channel_count`)
+AEC — type `acoustic_echo_canceler_simd` (props incl. `tail_length` — string,
+seconds, e.g. `"0.2"` — and `channel_count`)
 | Pin | Type / dir | Range | Role |
 |---|---|---|---|
 | `channel.N.ref.mic.ratio` | Float RO | −10…+10 dB | **RMLR** (doc: "Reference-to-Microphone Level Ratio") |
@@ -131,7 +134,7 @@ Flex input — type `io_card_flex_in_core_8flex` (8 ch; **no** `channel_count` p
 |---|---|---|
 | Talker level at mic input | −20…−15 dBFS | doc: `AEC_Gain_Structure.md` |
 | Room noise at mic input | ≤ −40 ok, ≤ −35 warn, else bad (quiet mode) | doc: `AEC_Gain_Structure.md` ("at most between about −35 and −40") |
-| Speech-to-noise | ≥ 15 dB min, 25 dB target | doc: `AEC_Gain_Structure.md` |
+| Speech-to-noise | ≥ 15 dB min, 25 dB target | doc: `AEC_Gain_Structure.md` (S4: acoustic SNR = quietest seat SPL − noise floor) |
 | Far-end level in room | 65…70 dBA | doc: `AEC_Gain_Structure.md` |
 | RMLR | ≈ 0 dB (warn beyond ±3) | doc: Gain Structure / Troubleshooting; ±3 = heuristic (v1) |
 | Mic response vs reference | mic 3–6 dB below ref | doc: `AEC_Troubleshooting.md` |
@@ -144,10 +147,10 @@ Flex input — type `io_card_flex_in_core_8flex` (8 ch; **no** `channel_count` p
 ---
 
 ## Resume notes
-1. The v2 plan is in TASKS.md. S1–S3 are done → next is **S4** (S5–S9 also
+1. The v2 plan is in TASKS.md. S1–S4 are done → next is **S5** (S6–S9 also
    only need S2). The contracts at the top of TASKS are fixed; change them only
    by editing both files.
-2. `npm test` is 91 green after S3. The Setup stage editor in `app.js` is
+2. `npm test` is 105 green after S4. The Setup stage editor in `app.js` is
    generic: add a role id to `STAGE_ROLES` + a `data-role` row in the HTML. Tests pass `rigPath` (and `pollMs: 30`) to
    `createApp` so they never touch the repo's `rig.json`. A new metered role
    only needs `roles.js` `meters()` — `meterList` + the poller pick it up.

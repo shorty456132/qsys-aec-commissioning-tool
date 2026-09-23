@@ -118,5 +118,37 @@ test('validateRig: bad component / shape → 400', () => {
   throws400({ chains: [] }, /chain/);
 });
 
+// --- S4: field readings -----------------------------------------------------------
+const withField = (field) => ({ chains: defaultRig().chains, field });
+
+test('validateRig field: readings round-trip; empty (null / []) allowed', () => {
+  const f = { seatSpl: [66, 68.5, 70], noiseFloor: 38, rt60: 0.6 };
+  assert.deepStrictEqual(validateRig(withField(f)).field, f);
+  assert.deepStrictEqual(validateRig(withField({ seatSpl: [], noiseFloor: null, rt60: null })).field, defaultRig().field);
+  assert.deepStrictEqual(validateRig(withField({})).field, defaultRig().field, 'missing keys default in');
+});
+
+test('validateRig field: non-numbers → 400 (string, NaN, Infinity, null seat)', () => {
+  for (const [k, v] of [['noiseFloor', '38'], ['rt60', NaN], ['noiseFloor', Infinity], ['rt60', '0.5']]) {
+    throws400(withField({ ...defaultRig().field, [k]: v }), new RegExp(k));
+  }
+  throws400(withField({ seatSpl: [66, null] }), /seatSpl\[1\]/);
+  throws400(withField({ seatSpl: ['66'] }), /seatSpl\[0\]/);
+  throws400(withField({ seatSpl: 66 }), /seatSpl/);
+});
+
+test('validateRig field: ranges — SPL/noise 0…140 dB, RT60 > 0…20 s, ≤ 32 seats', () => {
+  const ok = (f) => validateRig(withField({ ...defaultRig().field, ...f }));
+  ok({ seatSpl: [0, 140], noiseFloor: 0, rt60: 20 });
+  ok({ noiseFloor: 140, rt60: 0.01 });
+  throws400(withField({ seatSpl: [-1] }), /seatSpl\[0\]/);
+  throws400(withField({ seatSpl: [140.1] }), /seatSpl\[0\]/);
+  throws400(withField({ noiseFloor: -0.1 }), /noiseFloor/);
+  throws400(withField({ noiseFloor: 141 }), /noiseFloor/);
+  throws400(withField({ rt60: 0 }), /rt60/);
+  throws400(withField({ rt60: 20.1 }), /rt60/);
+  throws400(withField({ seatSpl: new Array(33).fill(66) }), /seatSpl/);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

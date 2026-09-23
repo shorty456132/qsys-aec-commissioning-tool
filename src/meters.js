@@ -8,6 +8,7 @@
 
 const { ROLES, STAGES } = require('./roles');
 const { advise, MODES } = require('./advisor');
+const { normalizeComponents } = require('./discovery');
 
 const GROUP_ID = 'aec-commissioning-meters';
 const DEFAULT_POLL_MS = 500;
@@ -37,6 +38,7 @@ class MeterPoller {
     this.cache = new Map(); // cacheKey → {value, string}
     this.error = null;      // last poll/rebuild failure; cleared by a good poll
     this.mode = 'off';      // S3 — which input rule the advisor applies (MODES)
+    this.props = null;      // S4 — {component: properties} from this connection's design
     this._dirty = true;     // group must be (re)built before the next Poll
     this._built = false;    // group exists on the current connection
     this._running = false;
@@ -80,6 +82,7 @@ class MeterPoller {
     this._timer = null;
     this._running = false;
     this._built = false;
+    this.props = null; // the next connection may be a different design
   }
 
   _schedule(gen) {
@@ -110,6 +113,12 @@ class MeterPoller {
     try {
       if (this._built) await this.session.call((c) => c.changeGroupClear(GROUP_ID));
       this.cache.clear();
+      // S4 — the AEC tail rule reads tail_length from the design, once per rebuild.
+      if (this.rig && this.rig.chains.some((c) => c.aec)) {
+        const comps = normalizeComponents(await this.session.call((c) => c.getComponents()));
+        if (gen !== this._gen) return;
+        this.props = Object.fromEntries(comps.map((c) => [c.name, c.properties]));
+      }
       const byComponent = new Map();
       for (const m of this.meters) {
         if (!byComponent.has(m.component)) byComponent.set(m.component, []);
@@ -140,7 +149,7 @@ class MeterPoller {
       };
     });
     const error = this.error || (state === 'disconnected' ? this.session.error : null);
-    const findings = this.rig ? advise(this.rig, values, { mode: this.mode }) : [];
+    const findings = this.rig ? advise(this.rig, values, { mode: this.mode, props: this.props }) : [];
     return { t: Date.now(), state, mode: this.mode, error, meters, findings };
   }
 }

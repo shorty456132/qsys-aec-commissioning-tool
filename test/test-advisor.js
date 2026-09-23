@@ -163,5 +163,86 @@ test('advise: MODES lists the Monitor modes', () => {
   assert.deepStrictEqual(MODES, ['off', 'talker', 'quiet']);
 });
 
+// --- S4: field readings ---------------------------------------------------------------
+const fieldRig = (field) => { const r = defaultRig(); r.field = { ...r.field, ...field }; return r; };
+const fieldF = (field, key, opts) => byKey(advise(fieldRig(field), {}, opts), key);
+
+test('advise seat SPL: none entered → no finding; all inside 65…70 (edges incl.) → ok', () => {
+  assert.deepStrictEqual(fieldF({}, 'field.seatSpl'), []);
+  const [f] = fieldF({ seatSpl: [65, 67.5, 70] }, 'field.seatSpl');
+  assert.strictEqual(f.level, 'ok');
+  assert.deepStrictEqual(f.trigger, { key: 'field.seatSpl', value: [65, 67.5, 70] });
+  assert.deepStrictEqual(f.adjust, []);
+  assert.strictEqual(f.source, 'doc:AEC_Gain_Structure.md');
+  assert.strictEqual(f.id, 'field:seatSpl');
+});
+
+test('advise seat SPL: a seat below 65 → warn "raise" amp/output; above 70 → warn "lower"; names the seats', () => {
+  const [lo] = fieldF({ seatSpl: [66, 64.9, 64] }, 'field.seatSpl');
+  assert.strictEqual(lo.level, 'warn');
+  assert.ok(/raise/i.test(lo.text) && /amplifier|output/i.test(lo.text), lo.text);
+  assert.ok(/seats? 2, 3/.test(lo.text), lo.text);
+  const [hi] = fieldF({ seatSpl: [70.1] }, 'field.seatSpl');
+  assert.strictEqual(hi.level, 'warn');
+  assert.ok(/lower/i.test(hi.text) && /amplifier|output/i.test(hi.text), hi.text);
+});
+
+test('advise seat SPL: seats both below and above → warn about coverage, not a single gain move', () => {
+  const [f] = fieldF({ seatSpl: [63, 72] }, 'field.seatSpl');
+  assert.strictEqual(f.level, 'warn');
+  assert.ok(/coverage/i.test(f.text), f.text);
+  assert.ok(!/\braise\b/i.test(f.text), f.text);
+});
+
+test('advise acoustic SNR: needs seats + noise floor; uses the worst (quietest) seat', () => {
+  assert.deepStrictEqual(fieldF({ seatSpl: [68] }, 'field.snr'), []);
+  assert.deepStrictEqual(fieldF({ noiseFloor: 40 }, 'field.snr'), []);
+  const [f] = fieldF({ seatSpl: [70, 66], noiseFloor: 40 }, 'field.snr');
+  assert.deepStrictEqual(f.trigger, { key: 'field.snr', value: 26 });
+  assert.strictEqual(f.source, 'doc:AEC_Gain_Structure.md');
+  assert.strictEqual(f.id, 'field:snr');
+});
+
+test('advise acoustic SNR: < 15 bad; 15…< 25 warn; ≥ 25 ok (edges)', () => {
+  const lv = (snr) => fieldF({ seatSpl: [68], noiseFloor: 68 - snr }, 'field.snr')[0].level;
+  assert.deepStrictEqual([lv(14.9), lv(15), lv(24.9), lv(25), lv(30)], ['bad', 'warn', 'warn', 'ok', 'ok']);
+  const [bad] = fieldF({ seatSpl: [68], noiseFloor: 60 }, 'field.snr');
+  assert.ok(/noise/i.test(bad.text), bad.text);
+});
+
+const TAIL_PROPS = { Room1_AEC: { tail_length: '0.2', channel_count: '1' } };
+const tailF = (rt60, props = TAIL_PROPS, rig = aecRig(1)) => {
+  rig.field.rt60 = rt60;
+  return byKey(advise(rig, {}, { props }), 'field.rt60');
+};
+
+test('advise tail: RT60 > AEC tail_length property → warn, heuristic, names Tail Length + DSP cost', () => {
+  const [f] = tailF(0.6);
+  assert.strictEqual(f.level, 'warn');
+  assert.strictEqual(f.source, 'heuristic');
+  assert.deepStrictEqual(f.trigger, { key: 'field.rt60', value: 0.6 });
+  assert.deepStrictEqual(f.adjust, [{ component: 'Room1_AEC', pin: 'tail_length', label: 'Tail Length (design property)' }]);
+  assert.ok(/0\.2 s/.test(f.text) && /0\.6 s/.test(f.text) && /DSP/.test(f.text), f.text);
+  assert.strictEqual(f.id, 'chain-1:aec.tail');
+});
+
+test('advise tail: RT60 ≤ tail (edge incl.) → ok; tail read from props, not assumed', () => {
+  assert.strictEqual(tailF(0.2)[0].level, 'ok');
+  assert.strictEqual(tailF(0.15)[0].level, 'ok');
+  assert.strictEqual(tailF(0.4, { Room1_AEC: { tail_length: '0.5' } })[0].level, 'ok');
+  assert.strictEqual(tailF(0.6, { Room1_AEC: { tail_length: '0.5' } })[0].level, 'warn');
+});
+
+test('advise tail: no RT60 / no AEC / no props / unparseable tail_length → no finding', () => {
+  assert.deepStrictEqual(tailF(null), []);
+  const r = aecRig(1);
+  r.field.rt60 = 0.6;
+  assert.deepStrictEqual(byKey(advise(r, {}), 'field.rt60'), [], 'no props passed');
+  assert.deepStrictEqual(tailF(0.6, null), []);
+  assert.deepStrictEqual(tailF(0.6, {}), []);
+  assert.deepStrictEqual(tailF(0.6, { Room1_AEC: { tail_length: 'long' } }), []);
+  assert.deepStrictEqual(tailF(0.6, TAIL_PROPS, defaultRig()), []);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

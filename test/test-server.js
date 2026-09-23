@@ -24,7 +24,8 @@ async function test(name, fn) {
 const FAKE_COMPONENTS = [
   { ID: 'MyGain', Name: 'MyGain', Type: 'gain', Properties: [], Controls: null, ControlSource: 2 },
   // S1: CONFIRMED AEC type string (ADR §Pins).
-  { ID: 'Room1_AEC', Name: 'Room1_AEC', Type: 'acoustic_echo_canceler_simd', Properties: [{ Name: 'channel_count', Value: '2' }], Controls: null, ControlSource: 2 },
+  // S4: tail_length is a string in seconds (CONFIRMED in emulation: "0.2").
+  { ID: 'Room1_AEC', Name: 'Room1_AEC', Type: 'acoustic_echo_canceler_simd', Properties: [{ Name: 'tail_length', Value: '0.2' }, { Name: 'channel_count', Value: '2' }], Controls: null, ControlSource: 2 },
   // S3: CONFIRMED Flex type string; emulation reports no properties for it.
   { ID: 'Flex_In_Core-1', Name: 'Flex_In_Core-1', Type: 'io_card_flex_in_core_8flex', Properties: [], Controls: null, ControlSource: 2 },
 ];
@@ -675,6 +676,56 @@ async function withRig(opts, fn, appOpts) {
     }, FAST);
   });
 
+  // --- S4: field readings --------------------------------------------------------
+  const fieldFinding = (snap, key) => snap.findings.find((f) => f.trigger && f.trigger.key === key);
+
+  await test('PUT /api/rig: field readings round-trip; bad reading → 400, nothing written', async () => {
+    const rigPath = tmpRigPath();
+    await withRig({}, async (app) => {
+      const bad = aecRig();
+      bad.field = { seatSpl: [66, 'loud'], noiseFloor: null, rt60: null };
+      const b = await call(app, 'PUT', '/api/rig', bad);
+      assert.strictEqual(b.code, 400);
+      assert.ok(/seatSpl\[1\]/.test(b.body.error), b.body.error);
+      assert.ok(!fs.existsSync(rigPath), 'rejected PUT never writes');
+      const good = aecRig();
+      good.field = { seatSpl: [66, 69], noiseFloor: 40, rt60: 0.5 };
+      assert.strictEqual((await call(app, 'PUT', '/api/rig', good)).code, 200);
+      assert.deepStrictEqual((await call(app, 'GET', '/api/rig')).body.field, good.field);
+    }, { rigPath });
+  });
+
+  await test('monitor: seat SPL + SNR findings show without a Core (no meters needed)', async () => {
+    await withRig({}, async (app) => {
+      const r = defaultRig();
+      r.field = { seatSpl: [62, 64], noiseFloor: 50, rt60: null };
+      await call(app, 'PUT', '/api/rig', r);
+      const s = await monitor(app);
+      assert.strictEqual(s.state, 'disconnected');
+      assert.strictEqual(fieldFinding(s, 'field.seatSpl').level, 'warn');
+      assert.deepStrictEqual([fieldFinding(s, 'field.snr').level, fieldFinding(s, 'field.snr').trigger.value], ['bad', 12]);
+    });
+  });
+
+  await test('monitor: RT60 vs the AEC tail_length read from the design; gone after disconnect', async () => {
+    await withRig({}, async (app, fake) => {
+      const r = aecRig();
+      r.field.rt60 = 0.6;
+      await call(app, 'PUT', '/api/rig', r);
+      assert.strictEqual(fieldFinding(await monitor(app), 'field.rt60'), undefined, 'no tail known before connecting');
+      fake.meters = { Room1_AEC: { [RMLR1]: 0, [ERLE1]: 10 } };
+      await connect(app, fake);
+      await wait(150);
+      assert.ok(countOf(fake, 'Component.GetComponents') >= 1, 'poller read the component properties');
+      const f = fieldFinding(await monitor(app), 'field.rt60');
+      assert.strictEqual(f.level, 'warn');
+      assert.ok(/0\.2 s/.test(f.text), f.text);
+      assert.deepStrictEqual(f.adjust, [{ component: 'Room1_AEC', pin: 'tail_length', label: 'Tail Length (design property)' }]);
+      await call(app, 'POST', '/api/disconnect');
+      assert.strictEqual(fieldFinding(await monitor(app), 'field.rt60'), undefined, 'design props not trusted offline');
+    }, FAST);
+  });
+
   // --- S1: new shell (ADR-09) ------------------------------------------------
   await test('/ serves the Setup/Monitor shell; v1 simulator is gone', async () => {
     const app = await startApp();
@@ -690,6 +741,8 @@ async function withRig(opts, fn, appOpts) {
       // S3: input stage on Setup; input meter + talker/quiet mode switch on Monitor.
       assert.ok(/id="input-comp"/.test(r.text) && /id="input-ch"/.test(r.text), 'input stage picker');
       assert.ok(/id="mon-input"/.test(r.text) && /name="mon-mode"/.test(r.text), 'input meter + mode switch');
+      // S4: field readings on Setup.
+      assert.ok(/id="field-seats"/.test(r.text) && /id="field-noise"/.test(r.text) && /id="field-rt60"/.test(r.text), 'field inputs');
       assert.strictEqual((await getRaw(app, '/gain-model.js')).code, 404);
       assert.strictEqual((await getRaw(app, '/aec-erl-rmlr-emulator-v1.html')).code, 404, 'v1 reference not served');
     } finally {

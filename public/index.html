@@ -100,6 +100,16 @@ label.f{display:flex;flex-direction:column;gap:3px;font-size:11.5px;color:var(--
       </div>
     </div>
     <p class="note">Components are listed by Code Name. The list is filtered to the stage's component type; tick “show all” if yours isn't there. The input filter knows Flex inputs only so far — Mic/Line In and Dante Rx need “show all”, and their meters may not read until their pins are confirmed. More stages arrive in later slices.</p>
+  </div>
+
+  <div class="panel">
+    <h2>Field readings</h2>
+    <div class="connform">
+      <label class="f">Seat SPL, far-end speech (dBA) <input id="field-seats" size="28" placeholder="e.g. 66, 68.5, 69 — one per seat"></label>
+      <label class="f">Noise floor (dB SPL) <input id="field-noise" type="number" step="0.1" min="0" max="140" style="width:8em"></label>
+      <label class="f">RT60, broadband (s) <input id="field-rt60" type="number" step="0.01" min="0.01" max="20" style="width:8em"></label>
+    </div>
+    <p class="note">Leave a box empty if you haven't measured it. Target: 65…70 dBA at every seat, ≥ 25 dB above the noise floor (15 dB minimum). RT60 is checked against the AEC's Tail Length while connected.</p>
     <div class="savebar">
       <button id="rig-save" type="button">Save</button>
       <span id="rig-msg"></span>

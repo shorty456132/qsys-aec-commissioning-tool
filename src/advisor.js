@@ -2,6 +2,8 @@
 // S2 — Advisor (ADR-12). Pure: advise(rig, values) → Finding[].
 //
 // S3 — advise(rig, values, { mode }): mode picks the input rule (talker/quiet).
+// S4 — + { props }: design properties for the RT60-vs-tail rule; the field
+// rules (seat SPL, acoustic SNR) read rig.field and need no meters.
 // `values` = { [chainId]: { [meterKey]: number } }, fresh values only — the
 // caller leaves stale meters out, so there's never advice on stale data.
 // Every finding names its trigger, the control(s) to turn and its source.
@@ -83,14 +85,83 @@ function levelRule(chain, v, mode) {
   return [];
 }
 
+// S4 — field readings (rig.field). These need no meters, so they apply with or
+// without a Core. The amp/output isn't a chain stage yet (S5), so the seat
+// rule names the adjustment in its text but can't name a pin.
+const SEAT_DBA = [65, 70];
+const SNR_DB = [15, 25]; // < 15 bad (minimum), < 25 warn (target)
+
+const fmtN = (v) => String(Math.round(v * 10) / 10);
+const seatList = (idx) => `seat${idx.length > 1 ? 's' : ''} ${idx.map((i) => i + 1).join(', ')}`;
+
+function seatRule(field) {
+  const seats = field.seatSpl;
+  if (!seats.length) return [];
+  const [lo, hi] = SEAT_DBA;
+  const idx = (pred) => seats.map((v, i) => (pred(v) ? i : -1)).filter((i) => i >= 0);
+  const low = idx((v) => v < lo);
+  const high = idx((v) => v > hi);
+  const span = `${fmtN(Math.min(...seats))}–${fmtN(Math.max(...seats))} dBA`;
+  const f = (level, text) => [{
+    id: 'field:seatSpl', level, text, trigger: { key: 'field.seatSpl', value: seats }, adjust: [], source: GAIN_DOC,
+  }];
+  if (low.length && high.length) {
+    return f('warn', `Seat SPL spans ${span} — ${seatList(low)} below ${lo} dBA, ${seatList(high)} above ${hi} dBA. One gain change can't fix both; check loudspeaker coverage and aiming, then set the level.`);
+  }
+  if (low.length) return f('warn', `Far-end level below ${lo} dBA at ${seatList(low)} (${span}). Raise the amplifier gain or the output level toward ${lo}…${hi} dBA.`);
+  if (high.length) return f('warn', `Far-end level above ${hi} dBA at ${seatList(high)} (${span}). Lower the amplifier gain or the output level toward ${lo}…${hi} dBA.`);
+  return f('ok', `Seat SPL ${span} — inside ${lo}…${hi} dBA at every seat.`);
+}
+
+// Acoustic SNR at the worst (quietest) seat: SPL − room noise floor.
+function snrRule(field) {
+  if (!field.seatSpl.length || typeof field.noiseFloor !== 'number') return [];
+  const spl = Math.min(...field.seatSpl);
+  const snr = Math.round((spl - field.noiseFloor) * 10) / 10;
+  const [min, target] = SNR_DB;
+  const calc = `quietest seat ${fmtN(spl)} dBA − noise floor ${fmtN(field.noiseFloor)} dB SPL`;
+  const fixes = `Reduce the room noise (HVAC, projector fans, acoustic treatment); raising the far-end level only helps up to ${SEAT_DBA[1]} dBA.`;
+  const f = (level, text) => [{
+    id: 'field:snr', level, text, trigger: { key: 'field.snr', value: snr }, adjust: [], source: GAIN_DOC,
+  }];
+  if (snr < min) return f('bad', `Acoustic SNR ${fmtN(snr)} dB (${calc}) — under the ${min} dB minimum. ${fixes}`);
+  if (snr < target) return f('warn', `Acoustic SNR ${fmtN(snr)} dB (${calc}) — under the ${target} dB target. ${fixes}`);
+  return f('ok', `Acoustic SNR ${fmtN(snr)} dB (${calc}) — at or above the ${target} dB target.`);
+}
+
+// RT60 vs the AEC's tail_length design property (seconds, a string —
+// CONFIRMED "0.2" in emulation). The doc only says "longer tail if
+// reverberant"; comparing against RT60 is our own rule → heuristic.
+function tailRule(chain, rt60, props) {
+  if (!chain.aec || typeof rt60 !== 'number' || !props) return [];
+  const p = props[chain.aec.component];
+  const tail = p ? Number.parseFloat(p.tail_length) : NaN;
+  if (!Number.isFinite(tail)) return [];
+  const base = { id: `${chain.id}:aec.tail`, trigger: { key: 'field.rt60', value: rt60 }, source: 'heuristic' };
+  if (rt60 <= tail) {
+    return [{ ...base, level: 'ok', text: `RT60 ${fmtN(rt60)} s fits the AEC tail length (${fmtN(tail)} s) on ${chain.aec.component}.`, adjust: [] }];
+  }
+  const t = { component: chain.aec.component, pin: 'tail_length', label: 'Tail Length (design property)' };
+  return [{
+    ...base,
+    level: 'warn',
+    text: `RT60 ${fmtN(rt60)} s is longer than the AEC tail length (${fmtN(tail)} s) on ${t.component}. Consider a longer ${t.label} in Designer — each longer tail step doubles the AEC's DSP cost.`,
+    adjust: [t],
+  }];
+}
+
 // opts.mode ∈ MODES (default 'off'): which input rule applies (S3).
-function advise(rig, values, { mode = 'off' } = {}) {
-  const out = [];
+// opts.props = { [component]: { [property]: string } } from Component.GetComponents
+// on the current connection (S4); omitted → no rule that needs the design.
+function advise(rig, values, { mode = 'off', props = null } = {}) {
+  const field = rig.field || { seatSpl: [], noiseFloor: null, rt60: null };
+  const out = [...seatRule(field), ...snrRule(field)];
   for (const chain of rig.chains) {
     const v = values[chain.id] || {};
     out.push(...clipRule(chain, v['input.clip']));
     out.push(...levelRule(chain, v['input.level'], mode));
     out.push(...rmlrRule(chain, v['aec.rmlr']));
+    out.push(...tailRule(chain, field.rt60, props));
   }
   return out;
 }

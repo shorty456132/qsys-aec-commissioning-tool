@@ -133,15 +133,44 @@
     $(role + '-comp').addEventListener('change', () => renderChannels(role, 1));
   }
 
+  // --- field readings (S4): empty box = not measured; the server checks ranges ----
+  function renderField() {
+    const f = rig.field;
+    $('field-seats').value = f.seatSpl.join(', ');
+    $('field-noise').value = f.noiseFloor === null ? '' : f.noiseFloor;
+    $('field-rt60').value = f.rt60 === null ? '' : f.rt60;
+  }
+
+  function readField() {
+    const num = (id, what) => {
+      const s = $(id).value.trim();
+      if (s === '') return null;
+      const v = Number(s);
+      if (!Number.isFinite(v)) throw new Error(what + ' must be a number');
+      return v;
+    };
+    const seats = $('field-seats').value.split(/[\s,;]+/).filter((s) => s !== '').map((s, i) => {
+      const v = Number(s);
+      if (!Number.isFinite(v)) throw new Error('Seat ' + (i + 1) + ' SPL "' + s + '" is not a number');
+      return v;
+    });
+    return { seatSpl: seats, noiseFloor: num('field-noise', 'Noise floor'), rt60: num('field-rt60', 'RT60') };
+  }
+
   $('rig-save').addEventListener('click', async () => {
     const next = JSON.parse(JSON.stringify(rig));
     for (const role of STAGE_ROLES) {
       const comp = $(role + '-comp').value;
       next.chains[0][role] = comp ? { component: comp, channel: Number($(role + '-ch').value) } : null;
     }
+    try { next.field = readField(); } catch (e) {
+      $('rig-msg').innerHTML = '<span class="err">' + esc(e.message) + '</span>';
+      return;
+    }
     $('rig-msg').textContent = 'Saving…';
     try {
       rig = await api('PUT', '/api/rig', next);
+      renderField();
       $('rig-msg').innerHTML = '<span class="ok">Saved to rig.json</span>';
     } catch (e) {
       $('rig-msg').innerHTML = '<span class="err">' + esc(e.message) + '</span>';
@@ -153,6 +182,7 @@
       rig = await api('GET', '/api/rig');
       $('chain-label').textContent = chain().label;
       STAGE_ROLES.forEach(renderStage);
+      renderField();
     } catch (e) {
       $('rig-msg').innerHTML = '<span class="err">' + esc(e.message) + '</span>';
       $('rig-save').disabled = true; // never overwrite a rig.json we couldn't read

@@ -84,19 +84,30 @@ function validateChain(c, i) {
     automixer: out.automixer, mixer: out.mixer, output: out.output };
 }
 
-// Field readings are S4; for now accept only the default shape's types.
+// S4 — field readings. Empty is allowed (null / []); anything entered must be
+// a plausible number: SPL + noise floor in dB SPL, broadband RT60 in seconds.
+const SPL_RANGE = [0, 140];
+const RT60_MAX_S = 20;
+const MAX_SEATS = 32;
+
 function validateField(f) {
   const d = defaultRig().field;
   if (f === undefined || f === null) return d;
-  if (typeof f !== 'object') throw bad('field must be an object');
-  const num = (v, k) => {
-    if (v === null || v === undefined) return null;
-    if (typeof v !== 'number' || !Number.isFinite(v)) throw bad(`field.${k} must be a number or null`);
+  if (typeof f !== 'object' || Array.isArray(f)) throw bad('field must be an object');
+  const num = (v, k, ok, range) => {
+    if (typeof v !== 'number' || !Number.isFinite(v) || !ok(v)) throw bad(`field.${k} must be a number ${range}`);
     return v;
   };
-  const seat = f.seatSpl === undefined ? [] : f.seatSpl;
-  if (!Array.isArray(seat)) throw bad('field.seatSpl must be an array');
-  return { seatSpl: seat.map((v, i) => num(v, `seatSpl[${i}]`)), noiseFloor: num(f.noiseFloor, 'noiseFloor'), rt60: num(f.rt60, 'rt60') };
+  const spl = (v, k) => num(v, k, (x) => x >= SPL_RANGE[0] && x <= SPL_RANGE[1], `in ${SPL_RANGE[0]}…${SPL_RANGE[1]} dB`);
+  const opt = (v, check) => (v === null || v === undefined ? null : check(v));
+  const seat = f.seatSpl === undefined || f.seatSpl === null ? [] : f.seatSpl;
+  if (!Array.isArray(seat)) throw bad('field.seatSpl must be an array of numbers');
+  if (seat.length > MAX_SEATS) throw bad(`field.seatSpl takes at most ${MAX_SEATS} seats`);
+  return {
+    seatSpl: seat.map((v, i) => spl(v, `seatSpl[${i}]`)),
+    noiseFloor: opt(f.noiseFloor, (v) => spl(v, 'noiseFloor')),
+    rt60: opt(f.rt60, (v) => num(v, 'rt60', (x) => x > 0 && x <= RT60_MAX_S, `in (0, ${RT60_MAX_S}] s`)),
+  };
 }
 
 // Throws a 400 SessionError on anything malformed; returns a normalized copy.
