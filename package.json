@@ -3,7 +3,7 @@
   "private": true,
   "description": "AEC commissioning tool (RMLR / ELR) — zero npm dependencies",
   "scripts": {
-    "start": "node server.js",
-    "test": "node test-qrc.js && node test-discovery.js && node test-roles.js && node test-advisor.js && node test-server.js"
+    "start": "node src/server.js",
+    "test": "node test/test-qrc.js && node test/test-discovery.js && node test/test-roles.js && node test/test-advisor.js && node test/test-server.js"
   }
 }

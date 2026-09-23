@@ -5,7 +5,7 @@
 // Run: node test-discovery.js
 
 const assert = require('assert');
-const { normalizeComponents, normalizeControls } = require('./discovery');
+const { normalizeComponents, normalizeControls } = require('../src/discovery');
 
 let passed = 0;
 let failed = 0;

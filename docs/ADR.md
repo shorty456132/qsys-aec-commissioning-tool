@@ -42,8 +42,8 @@ Until then the card reads "needs a named output component".
 alive; the timer stays as a backstop.
 
 **ADR-09 — UI = Setup tab + Monitor tab; v1 UI removed.** The simulator and v1
-markup are deleted from `public/`. `aec-erl-rmlr-emulator-v1.html` stays in
-the repo root as a reference only (not served).
+markup are deleted from `public/`. `reference/aec-erl-rmlr-emulator-v1.html` stays in
+the repo as a reference only (not served).
 
 **ADR-10 — Chain-stage model.** The tech builds a *chain* (one mic path) by
 picking a component + channel per stage: input → mic gain → AEC → automixer →
@@ -152,4 +152,4 @@ Flex input — type `io_card_flex_in_core_8flex` (8 ch; **no** `channel_count` p
    `createApp` so they never touch the repo's `rig.json`. A new metered role
    only needs `roles.js` `meters()` — `meterList` + the poller pick it up.
 3. Emulation: `127.0.0.1:1710`, design = `200ms_Acoustic_Echo_Canceler` +
-   `Flex_In_Core-1`. Server: `node server.js` (:8080; `PORT=` to override).
+   `Flex_In_Core-1`. Server: `npm start` (`node src/server.js`) (:8080; `PORT=` to override).

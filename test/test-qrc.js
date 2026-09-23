@@ -4,7 +4,7 @@
 
 const assert = require('assert');
 const net = require('net');
-const { QRC, QRCError } = require('./qrc');
+const { QRC, QRCError } = require('../src/qrc');
 
 let passed = 0;
 let failed = 0;

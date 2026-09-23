@@ -3,9 +3,9 @@
 // Run: node test-advisor.js
 
 const assert = require('assert');
-const { advise, MODES } = require('./advisor');
-const { meterList } = require('./meters');
-const { defaultRig } = require('./roles');
+const { advise, MODES } = require('../src/advisor');
+const { meterList } = require('../src/meters');
+const { defaultRig } = require('../src/roles');
 
 let passed = 0;
 let failed = 0;

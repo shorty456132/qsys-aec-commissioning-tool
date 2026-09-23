@@ -5,7 +5,7 @@
 const assert = require('assert');
 const http = require('http');
 const net = require('net');
-const { createApp } = require('./server');
+const { createApp } = require('../src/server');
 
 let passed = 0;
 let failed = 0;
@@ -266,7 +266,7 @@ async function withRig(opts, fn, appOpts) {
   });
 
   await test('port defaults to 1710; password is never echoed back', async () => {
-    const { parseConnectBody } = require('./session');
+    const { parseConnectBody } = require('../src/session');
     assert.strictEqual(parseConnectBody({ host: 'core.local' }).port, 1710);
     await withRig({}, async (app, fake) => {
       const r = await call(app, 'POST', '/api/connect', { host: '127.0.0.1', port: fake.port, user: 'tech', pass: 's3cret' });
@@ -380,7 +380,7 @@ async function withRig(opts, fn, appOpts) {
   });
 
   // --- S1: rig persistence (ADR-10) ------------------------------------------
-  const { defaultRig } = require('./roles');
+  const { defaultRig } = require('../src/roles');
   const aecRig = () => {
     const r = defaultRig();
     r.chains[0].aec = { component: 'Room1_AEC', channel: 1 };

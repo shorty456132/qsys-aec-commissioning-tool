@@ -3,7 +3,7 @@
 // Run: node test-roles.js
 
 const assert = require('assert');
-const { ROLES, STAGES, defaultRig, validateRig } = require('./roles');
+const { ROLES, STAGES, defaultRig, validateRig } = require('../src/roles');
 
 let passed = 0;
 let failed = 0;

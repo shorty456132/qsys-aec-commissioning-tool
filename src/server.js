@@ -10,8 +10,8 @@ const { MeterPoller } = require('./meters');
 const { MODES } = require('./advisor');
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 8080;
-const PUBLIC_DIR = path.join(__dirname, 'public');
-const DEFAULT_RIG_PATH = path.join(__dirname, 'rig.json');
+const PUBLIC_DIR = path.join(__dirname, '..', 'public');
+const DEFAULT_RIG_PATH = path.join(__dirname, '..', 'rig.json');
 
 // --- rig.json (ADR-10) ---------------------------------------------------------
 // Read on every GET so the file is the only source of truth. A corrupt file is
