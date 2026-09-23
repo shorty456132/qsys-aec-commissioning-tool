@@ -98,8 +98,14 @@ label.f{display:flex;flex-direction:column;gap:3px;font-size:11.5px;color:var(--
         <label class="f">Channel <select id="aec-ch"></select></label>
         <label class="chk"><input type="checkbox" id="aec-all"> show all components</label>
       </div>
+      <div class="stage" data-role="output">
+        <div class="name">Output</div>
+        <label class="f">Component <select id="output-comp"></select></label>
+        <label class="f">Channel <select id="output-ch"></select></label>
+        <label class="chk"><input type="checkbox" id="output-all"> show all components</label>
+      </div>
     </div>
-    <p class="note">Components are listed by Code Name. The list is filtered to the stage's component type; tick “show all” if yours isn't there. The input filter knows Flex inputs only so far — Mic/Line In and Dante Rx need “show all”, and their meters may not read until their pins are confirmed. More stages arrive in later slices.</p>
+    <p class="note">Components are listed by Code Name. The list is filtered to the stage's component type; tick “show all” if yours isn't there. The input filter knows Flex inputs only so far — Mic/Line In and Dante Rx need “show all”, and their meters may not read until their pins are confirmed. The output filter likewise knows Flex outputs only. More stages arrive in later slices.</p>
   </div>
 
   <div class="panel">
@@ -122,10 +128,11 @@ label.f{display:flex;flex-direction:column;gap:3px;font-size:11.5px;color:var(--
     <h2>Meters</h2>
     <div id="mon-status" class="connstatus" style="margin:0 0 12px"></div>
     <div class="modebar">
-      <span>Input check:</span>
+      <span>Room right now:</span>
       <label><input type="radio" name="mon-mode" value="off" checked> Off</label>
       <label><input type="radio" name="mon-mode" value="talker"> Talker test <span class="csub">— someone speaking normally at the mic</span></label>
       <label><input type="radio" name="mon-mode" value="quiet"> Quiet room <span class="csub">— nobody speaking, no program</span></label>
+      <label><input type="radio" name="mon-mode" value="farend"> Far-end test <span class="csub">— far-end audio playing, nobody in the room speaking (reads ELR)</span></label>
     </div>
     <div class="cards">
       <div class="card" id="mon-input">
@@ -146,9 +153,16 @@ label.f{display:flex;flex-direction:column;gap:3px;font-size:11.5px;color:var(--
         <div class="scale"><span>0</span><span>10</span><span>20</span></div>
         <div class="val">—</div>
       </div>
+      <div class="card" id="mon-output">
+        <div class="ctitle">Output level <span class="csub">−60…0 dBFS · peaks ≤ −3</span></div>
+        <div class="track"><div class="fill"></div></div>
+        <div class="scale"><span>−60</span><span>−30</span><span>0</span></div>
+        <div class="val">—</div>
+      </div>
       <div class="card" id="mon-elr">
-        <div class="ctitle">ELR <span class="csub">echo level ratio (derived)</span></div>
-        <p class="csub" style="margin:10px 0 0">ELR needs a named output component — set the output stage (S5). ERLE is not ELR.</p>
+        <div class="ctitle">ELR <span class="csub">output − mic echo level (derived) · target ≥ 6 dB</span></div>
+        <div class="val" id="mon-elr-val">—</div>
+        <p class="csub" id="mon-elr-needs" style="margin:6px 0 0">ELR needs a named output component — set the output stage. ERLE is not ELR.</p>
       </div>
     </div>
   </div>

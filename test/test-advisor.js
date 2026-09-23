@@ -3,9 +3,9 @@
 // Run: node test-advisor.js
 
 const assert = require('assert');
-const { advise, MODES } = require('../src/advisor');
+const { advise, deriveElr, MODES } = require('../src/advisor');
 const { meterList } = require('../src/meters');
-const { defaultRig } = require('../src/roles');
+const { ROLES, defaultRig } = require('../src/roles');
 
 let passed = 0;
 let failed = 0;
@@ -160,7 +160,7 @@ test('advise: off / no mode → no talker or noise findings; no input stage or v
 });
 
 test('advise: MODES lists the Monitor modes', () => {
-  assert.deepStrictEqual(MODES, ['off', 'talker', 'quiet']);
+  assert.deepStrictEqual(MODES, ['off', 'talker', 'quiet', 'farend']);
 });
 
 // --- S4: field readings ---------------------------------------------------------------
@@ -242,6 +242,102 @@ test('advise tail: no RT60 / no AEC / no props / unparseable tail_length → no 
   assert.deepStrictEqual(tailF(0.6, {}), []);
   assert.deepStrictEqual(tailF(0.6, { Room1_AEC: { tail_length: 'long' } }), []);
   assert.deepStrictEqual(tailF(0.6, TAIL_PROPS, defaultRig()), []);
+});
+
+// --- S5: output stage + derived ELR -----------------------------------------------------
+const OUT = { component: 'Flex_Out_Core-1', channel: 2 };
+const outRig = ({ input = true, output = true } = {}) => {
+  const r = defaultRig();
+  if (input) r.chains[0].input = { component: 'Flex_In_Core-1', channel: 3 };
+  if (output) r.chains[0].output = { ...OUT };
+  return r;
+};
+const OUT_GAIN = () => {
+  const k = ROLES.output.knobs(OUT).find((x) => x.key === 'output.gain');
+  return { component: OUT.component, pin: k.pin, label: k.label };
+};
+const elrOf = (vals, mode = 'farend', rig = outRig()) => deriveElr(rig.chains[0], vals, mode);
+
+test('meterList: output stage comes last (signal order) with output.level', () => {
+  const r = outRig();
+  r.chains[0].aec = { component: 'Room1_AEC', channel: 1 };
+  const m = meterList(r);
+  assert.deepStrictEqual(m[m.length - 1].role, 'output');
+  assert.ok(m.some((x) => x.key === 'output.level' && x.component === OUT.component));
+});
+
+test('deriveElr: output level − mic echo level, far-end test mode', () => {
+  assert.deepStrictEqual(elrOf({ 'output.level': -12, 'input.level': -30 }), { chain: 'chain-1', value: 18, needs: null });
+  assert.strictEqual(elrOf({ 'output.level': -20.25, 'input.level': -24.5 }).value, 4.3, 'rounded to 0.1 dB');
+});
+
+test('deriveElr: a missing stage → value null + "needs …" naming it', () => {
+  const noOut = elrOf({ 'input.level': -30 }, 'farend', outRig({ output: false }));
+  assert.strictEqual(noOut.value, null);
+  assert.ok(/output/i.test(noOut.needs), noOut.needs);
+  const noIn = elrOf({ 'output.level': -12 }, 'farend', outRig({ input: false }));
+  assert.strictEqual(noIn.value, null);
+  assert.ok(/input/i.test(noIn.needs), noIn.needs);
+  const none = elrOf({}, 'farend', outRig({ input: false, output: false }));
+  assert.ok(/input/i.test(none.needs) && /output/i.test(none.needs), none.needs);
+});
+
+test('deriveElr: both stages set but not in far-end mode → needs the Far-end test', () => {
+  for (const mode of ['off', 'talker', 'quiet']) {
+    const d = elrOf({ 'output.level': -12, 'input.level': -30 }, mode);
+    assert.strictEqual(d.value, null, mode);
+    assert.ok(/far-end/i.test(d.needs), d.needs);
+  }
+});
+
+test('deriveElr: stages set, far-end mode, a meter stale/missing → needs live meters', () => {
+  const d = elrOf({ 'output.level': -12 });
+  assert.strictEqual(d.value, null);
+  assert.ok(/meter/i.test(d.needs), d.needs);
+});
+
+const elrF = (vals, mode = 'farend', rig = outRig()) => byKey(advise(rig, { 'chain-1': vals }, { mode }), 'derived.elr');
+
+test('advise ELR: < 6 dB → warn, heuristic, trigger derived.elr; ≥ 6 (edge) → ok', () => {
+  const [f] = elrF({ 'output.level': -20, 'input.level': -25 });
+  assert.strictEqual(f.level, 'warn');
+  assert.strictEqual(f.source, 'heuristic');
+  assert.deepStrictEqual(f.trigger, { key: 'derived.elr', value: 5 });
+  assert.strictEqual(f.id, 'chain-1:derived.elr');
+  assert.ok(/ERLE/.test(f.text) === false, 'ELR text never mentions ERLE');
+  assert.ok(/loudspeaker|amplifier/i.test(f.text), f.text);
+  assert.strictEqual(elrF({ 'output.level': -20, 'input.level': -26 })[0].level, 'ok');
+});
+
+test('advise ELR: no finding when ELR can\'t be derived (mode, stage, meter)', () => {
+  assert.deepStrictEqual(elrF({ 'output.level': -20, 'input.level': -25 }, 'talker'), []);
+  assert.deepStrictEqual(elrF({ 'input.level': -25 }, 'farend', outRig({ output: false })), []);
+  assert.deepStrictEqual(elrF({ 'output.level': -20 }), []);
+});
+
+test('advise output: peak > −3 dBFS → warn lower output gain, doc source, any mode; −3 → nothing', () => {
+  for (const mode of MODES) {
+    const [f] = byKey(advise(outRig(), { 'chain-1': { 'output.level': -2.9 } }, { mode }), 'output.level');
+    assert.strictEqual(f.level, 'warn', mode);
+    assert.deepStrictEqual(f.adjust, [OUT_GAIN()]);
+    assert.strictEqual(f.source, 'doc:AEC_Gain_Structure.md');
+    assert.ok(/lower/i.test(f.text) && /-3 dBFS/.test(f.text), f.text);
+  }
+  assert.deepStrictEqual(byKey(advise(outRig(), { 'chain-1': { 'output.level': -3 } }), 'output.level'), []);
+});
+
+test('advise seat SPL: with an output stage, a low/high seat finding names the output gain in adjust', () => {
+  const r = outRig();
+  r.field.seatSpl = [62];
+  const [lo] = byKey(advise(r, {}), 'field.seatSpl');
+  assert.deepStrictEqual(lo.adjust, [OUT_GAIN()]);
+  r.field.seatSpl = [73];
+  assert.deepStrictEqual(byKey(advise(r, {}), 'field.seatSpl')[0].adjust, [OUT_GAIN()]);
+  r.field.seatSpl = [63, 73];
+  assert.deepStrictEqual(byKey(advise(r, {}), 'field.seatSpl')[0].adjust, [], 'coverage: not a gain move');
+  r.field.seatSpl = [62];
+  r.chains[0].output = null;
+  assert.deepStrictEqual(byKey(advise(r, {}), 'field.seatSpl')[0].adjust, [], 'no output stage → text only');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

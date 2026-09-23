@@ -41,7 +41,9 @@ function rmlrRule(chain, v) {
 // S3 — input stage (doc: AEC_Gain_Structure.md). One meter can't tell speech
 // from room noise, so the tech picks the Monitor mode: 'talker' = someone
 // speaking normally at the mic, 'quiet' = nobody speaking, no program.
-const MODES = ['off', 'talker', 'quiet'];
+// S5 — 'farend' = far-end audio playing, nobody in the room speaking: the
+// input meter then reads the echo, so ELR can be derived.
+const MODES = ['off', 'talker', 'quiet', 'farend'];
 const GAIN_DOC = 'doc:AEC_Gain_Structure.md';
 const TALKER_DBFS = [-20, -15];
 const NOISE_DBFS = [-40, -35]; // ≤ −40 ok; up to −35 marginal; above → < 15 dB SNR
@@ -85,16 +87,61 @@ function levelRule(chain, v, mode) {
   return [];
 }
 
+// S5 — output stage. Program peaks ≤ −3 dBFS (doc), any mode.
+function outputPeakRule(chain, v) {
+  if (!chain.output || typeof v !== 'number' || v <= PEAK_DBFS) return [];
+  const g = knob(chain, 'output', 'output.gain');
+  return [{
+    id: `${chain.id}:output.level`, level: 'warn', trigger: { key: 'output.level', value: v }, source: GAIN_DOC,
+    text: `Output ${fmtDbfs(v)} — above ${PEAK_DBFS} dBFS, near clipping. Lower ${g.label} (${g.pin}) on ${g.component}.`,
+    adjust: [g],
+  }];
+}
+
+// ELR = output level − mic echo level (ADR-07), both in dBFS. The input meter
+// reads echo only in the far-end test, so ELR is derived only then.
+// → { chain, value: number|null, needs: string|null } — `needs` says why not.
+const ELR_MIN_DB = 6; // heuristic (v1)
+
+function deriveElr(chain, values, mode) {
+  const d = (value, needs) => ({ chain: chain.id, value, needs });
+  const missing = ['input', 'output'].filter((s) => !chain[s]);
+  if (missing.length) return d(null, `ELR needs a named ${missing.join(' and ')} component — set it on the Setup tab.`);
+  if (mode !== 'farend') return d(null, 'ELR is read in the Far-end test — play far-end audio with nobody in the room speaking.');
+  const out = values['output.level'];
+  const mic = values['input.level'];
+  if (typeof out !== 'number' || typeof mic !== 'number') return d(null, 'ELR needs live output and input meters.');
+  return d(Math.round((out - mic) * 10) / 10, null);
+}
+
+function elrRule(chain, values, mode) {
+  const { value } = deriveElr(chain, values, mode);
+  if (value === null) return [];
+  const base = { id: `${chain.id}:derived.elr`, trigger: { key: 'derived.elr', value }, source: 'heuristic', adjust: [] };
+  if (value >= ELR_MIN_DB) return [{ ...base, level: 'ok', text: `ELR ${fmtDb(value)} — at or above ${ELR_MIN_DB} dB.` }];
+  return [{
+    ...base,
+    level: 'warn',
+    text: `ELR ${fmtDb(value)} — under ${ELR_MIN_DB} dB: the mic hears too much of the loudspeakers. This is a room/amp fix, not DSP — lower the amplifier gain, aim loudspeakers away from the mics, or move mics closer to the talkers.`,
+  }];
+}
+
 // S4 — field readings (rig.field). These need no meters, so they apply with or
-// without a Core. The amp/output isn't a chain stage yet (S5), so the seat
-// rule names the adjustment in its text but can't name a pin.
+// without a Core. S5: with an output stage set, a one-way seat finding names
+// its gain knob; otherwise the adjustment lives in the text only.
 const SEAT_DBA = [65, 70];
 const SNR_DB = [15, 25]; // < 15 bad (minimum), < 25 warn (target)
 
 const fmtN = (v) => String(Math.round(v * 10) / 10);
 const seatList = (idx) => `seat${idx.length > 1 ? 's' : ''} ${idx.map((i) => i + 1).join(', ')}`;
 
-function seatRule(field) {
+// The first chain with an output stage (the UI has one chain; ADR-10).
+function outputGainKnob(rig) {
+  const chain = rig.chains.find((c) => c.output);
+  return chain ? [knob(chain, 'output', 'output.gain')] : [];
+}
+
+function seatRule(field, outGain = []) {
   const seats = field.seatSpl;
   if (!seats.length) return [];
   const [lo, hi] = SEAT_DBA;
@@ -102,14 +149,16 @@ function seatRule(field) {
   const low = idx((v) => v < lo);
   const high = idx((v) => v > hi);
   const span = `${fmtN(Math.min(...seats))}–${fmtN(Math.max(...seats))} dBA`;
-  const f = (level, text) => [{
-    id: 'field:seatSpl', level, text, trigger: { key: 'field.seatSpl', value: seats }, adjust: [], source: GAIN_DOC,
+  const f = (level, text, adjust = []) => [{
+    id: 'field:seatSpl', level, text, trigger: { key: 'field.seatSpl', value: seats }, adjust, source: GAIN_DOC,
   }];
   if (low.length && high.length) {
     return f('warn', `Seat SPL spans ${span} — ${seatList(low)} below ${lo} dBA, ${seatList(high)} above ${hi} dBA. One gain change can't fix both; check loudspeaker coverage and aiming, then set the level.`);
   }
-  if (low.length) return f('warn', `Far-end level below ${lo} dBA at ${seatList(low)} (${span}). Raise the amplifier gain or the output level toward ${lo}…${hi} dBA.`);
-  if (high.length) return f('warn', `Far-end level above ${hi} dBA at ${seatList(high)} (${span}). Lower the amplifier gain or the output level toward ${lo}…${hi} dBA.`);
+  const g = outGain[0];
+  const where = g ? `the amplifier gain or ${g.label} (${g.pin}) on ${g.component}` : 'the amplifier gain or the output level';
+  if (low.length) return f('warn', `Far-end level below ${lo} dBA at ${seatList(low)} (${span}). Raise ${where} toward ${lo}…${hi} dBA.`, outGain);
+  if (high.length) return f('warn', `Far-end level above ${hi} dBA at ${seatList(high)} (${span}). Lower ${where} toward ${lo}…${hi} dBA.`, outGain);
   return f('ok', `Seat SPL ${span} — inside ${lo}…${hi} dBA at every seat.`);
 }
 
@@ -155,15 +204,17 @@ function tailRule(chain, rt60, props) {
 // on the current connection (S4); omitted → no rule that needs the design.
 function advise(rig, values, { mode = 'off', props = null } = {}) {
   const field = rig.field || { seatSpl: [], noiseFloor: null, rt60: null };
-  const out = [...seatRule(field), ...snrRule(field)];
+  const out = [...seatRule(field, outputGainKnob(rig)), ...snrRule(field)];
   for (const chain of rig.chains) {
     const v = values[chain.id] || {};
     out.push(...clipRule(chain, v['input.clip']));
     out.push(...levelRule(chain, v['input.level'], mode));
     out.push(...rmlrRule(chain, v['aec.rmlr']));
     out.push(...tailRule(chain, field.rt60, props));
+    out.push(...outputPeakRule(chain, v['output.level']));
+    out.push(...elrRule(chain, v, mode));
   }
   return out;
 }
 
-module.exports = { advise, MODES, RMLR_WINDOW_DB };
+module.exports = { advise, deriveElr, MODES, RMLR_WINDOW_DB };

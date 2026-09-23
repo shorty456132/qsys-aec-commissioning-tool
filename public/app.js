@@ -75,9 +75,9 @@
     refreshStatus();
   });
 
-  // --- chain editor: one row per stage (S1 AEC, S3 input) ---------------------------
+  // --- chain editor: one row per stage (S1 AEC, S3 input, S5 output) ----------------
   // Each row has #<role>-comp, #<role>-ch and #<role>-all; the role id is the chain key.
-  const STAGE_ROLES = ['input', 'aec'];
+  const STAGE_ROLES = ['input', 'aec', 'output'];
   const chain = () => rig.chains[0];
 
   function channelCount(role, name) {
@@ -223,13 +223,19 @@
   function renderMonitor(s) {
     const where = s.error ? ' <span class="err">(' + esc(s.error) + ')</span>' : '';
     $('mon-status').innerHTML = '<i style="background:' + (COLORS[s.state] || COLORS.disconnected) + '"></i><span>' +
-      esc(s.state) + where + (s.meters.length ? '' : ' — no metered stage set; pick an input or AEC on the Setup tab') + '</span>';
+      esc(s.state) + where + (s.meters.length ? '' : ' — no metered stage set; pick an input, AEC or output on the Setup tab') + '</span>';
     const byKey = (k) => s.meters.find((m) => m.key === k);
     renderMeter($('mon-input'), byKey('input.level'), { lo: -60, hi: 0, warn: (v) => v > -3 });
     const clip = byKey('input.clip');
     $('mon-clip').classList.toggle('on', !!(clip && !clip.stale && clip.value >= 0.5));
     renderMeter($('mon-rmlr'), byKey('aec.rmlr'), { centred: true, warn: (v) => Math.abs(v) > 3 });
     renderMeter($('mon-erle'), byKey('aec.erle'));
+    renderMeter($('mon-output'), byKey('output.level'), { lo: -60, hi: 0, warn: (v) => v > -3 });
+    // S5 — ELR is derived server-side; `needs` says why there's no value yet.
+    const elr = s.derived && s.derived.elr && s.derived.elr[0];
+    $('mon-elr-val').textContent = elr && elr.value !== null ? (elr.value > 0 ? '+' : '') + elr.value.toFixed(1) + ' dB' : '—';
+    $('mon-elr-val').style.color = elr && elr.value !== null && elr.value < 6 ? 'var(--amber)' : '';
+    $('mon-elr-needs').textContent = elr ? (elr.needs || 'ERLE is not ELR.') : 'ELR needs a named output component — set the output stage. ERLE is not ELR.';
     if (s.mode) for (const r of document.querySelectorAll('input[name="mon-mode"]')) r.checked = r.value === s.mode;
     $('mon-findings').innerHTML = s.findings.length
       ? s.findings.map((f) => '<li><i style="background:' + (LEVEL_COLORS[f.level] || COLORS.disconnected) + '"></i><span>' +

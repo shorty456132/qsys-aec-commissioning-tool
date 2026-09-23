@@ -748,6 +748,37 @@ async function withRig(opts, fn, appOpts) {
     }
   });
 
+  // --- S5: output stage + derived ELR ---------------------------------------------
+  const { ROLES } = require('../src/roles');
+  const OUT2 = { component: 'Flex_Out_Core-1', channel: 2 };
+  const outPin = ROLES.output.meters(OUT2).find((m) => m.key === 'output.level').pin;
+  const elrRig = () => { const r = inputRig(); r.chains[0].output = { ...OUT2 }; return r; };
+
+  await test('monitor: far-end mode accepted; snapshot.derived.elr = output − input; ELR < 6 → warn', async () => {
+    await withRig({}, async (app, fake) => {
+      await call(app, 'PUT', '/api/rig', elrRig());
+      fake.meters = { 'Flex_In_Core-1': { [LEVEL3]: -24, [CLIP3]: 0 }, 'Flex_Out_Core-1': { [outPin]: -20 } };
+      await connect(app, fake);
+      await wait(150);
+      let s = await monitor(app);
+      assert.strictEqual(s.derived.elr[0].value, null, 'off mode: not derived');
+      assert.ok(/far-end/i.test(s.derived.elr[0].needs), s.derived.elr[0].needs);
+      assert.strictEqual((await call(app, 'PUT', '/api/monitor/mode', { mode: 'farend' })).code, 200);
+      s = await monitor(app);
+      assert.deepStrictEqual(s.derived.elr, [{ chain: 'chain-1', value: 4, needs: null }]);
+      assert.strictEqual(inputFinding(s, 'derived.elr').level, 'warn');
+    }, FAST);
+  });
+
+  await test('monitor: no output stage → derived.elr keeps the "needs … output" text, offline too', async () => {
+    await withRig({}, async (app) => {
+      await call(app, 'PUT', '/api/rig', inputRig());
+      const s = await monitor(app);
+      assert.strictEqual(s.derived.elr[0].value, null);
+      assert.ok(/output/i.test(s.derived.elr[0].needs), s.derived.elr[0].needs);
+    });
+  });
+
   // --- S1: new shell (ADR-09) ------------------------------------------------
   await test('/ serves the Setup/Monitor shell; v1 simulator is gone', async () => {
     const app = await startApp();
@@ -765,6 +796,9 @@ async function withRig(opts, fn, appOpts) {
       assert.ok(/id="mon-input"/.test(r.text) && /name="mon-mode"/.test(r.text), 'input meter + mode switch');
       // S4: field readings on Setup.
       assert.ok(/id="field-seats"/.test(r.text) && /id="field-noise"/.test(r.text) && /id="field-rt60"/.test(r.text), 'field inputs');
+      // S5: output stage on Setup; output meter, ELR value, far-end mode on Monitor.
+      assert.ok(/id="output-comp"/.test(r.text) && /id="output-ch"/.test(r.text), 'output stage picker');
+      assert.ok(/id="mon-output"/.test(r.text) && /id="mon-elr-val"/.test(r.text) && /value="farend"/.test(r.text), 'output meter, ELR, far-end mode');
       assert.strictEqual((await getRaw(app, '/gain-model.js')).code, 404);
       assert.strictEqual((await getRaw(app, '/aec-erl-rmlr-emulator-v1.html')).code, 404, 'v1 reference not served');
     } finally {

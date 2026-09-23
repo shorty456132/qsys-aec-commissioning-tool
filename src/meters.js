@@ -7,7 +7,7 @@
 // goes through `session.call` (ADR-03).
 
 const { ROLES, STAGES } = require('./roles');
-const { advise, MODES } = require('./advisor');
+const { advise, deriveElr, MODES } = require('./advisor');
 const { normalizeComponents } = require('./discovery');
 
 const GROUP_ID = 'aec-commissioning-meters';
@@ -150,7 +150,9 @@ class MeterPoller {
     });
     const error = this.error || (state === 'disconnected' ? this.session.error : null);
     const findings = this.rig ? advise(this.rig, values, { mode: this.mode, props: this.props }) : [];
-    return { t: Date.now(), state, mode: this.mode, error, meters, findings };
+    // S5 — values computed from several meters, one per chain, with "needs …" when not derivable.
+    const elr = this.rig ? this.rig.chains.map((c) => deriveElr(c, values[c.id] || {}, this.mode)) : [];
+    return { t: Date.now(), state, mode: this.mode, error, meters, derived: { elr }, findings };
   }
 }
 
