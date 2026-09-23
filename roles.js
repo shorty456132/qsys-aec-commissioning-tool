@@ -7,6 +7,22 @@
 const { SessionError } = require('./session');
 
 const ROLES = {
+  // S3. Mic/Line In + Dante Rx aren't in the emulation design yet → "show all"
+  // until their type strings + pins are CONFIRMED (NEEDS-TEST).
+  input: {
+    id: 'input',
+    label: 'Input',
+    typeMatch: /^io_card_flex_in/i, // CONFIRMED: io_card_flex_in_core_8flex
+    meters: ({ channel }) => [
+      // NEEDS-TEST: dBFS scale of the live meter (S10); range CONFIRMED −120…+20.
+      { key: 'input.level', pin: `channel.${channel}.digital.input.level`, label: 'Input level', unit: 'dBFS', lo: -120, hi: 20 },
+      // Boolean; CONFIRMED Poll reports it as 0/1.
+      { key: 'input.clip', pin: `channel.${channel}.clip`, label: 'Clip', unit: '', lo: 0, hi: 1 },
+    ],
+    knobs: ({ channel }) => [
+      { key: 'input.gain', pin: `channel.${channel}.input.gain`, label: 'Input gain', lo: -100, hi: 20 },
+    ],
+  },
   aec: {
     id: 'aec',
     label: 'AEC',

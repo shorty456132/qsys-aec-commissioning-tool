@@ -7,6 +7,7 @@ const { Session, SessionError } = require('./session');
 const { normalizeComponents, normalizeControls } = require('./discovery');
 const { ROLES, defaultRig, validateRig } = require('./roles');
 const { MeterPoller } = require('./meters');
+const { MODES } = require('./advisor');
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 8080;
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -93,6 +94,12 @@ function apiRoutes(session, rigPath, poller) {
     },
     // S2 — Monitor snapshot, short-polled by the UI (ADR-11).
     'GET /api/monitor': (req, res) => json(res, 200, poller.snapshot()),
+    // S3 — talker / quiet-room mode for the input rules; session state, not saved.
+    'PUT /api/monitor/mode': async (req, res) => {
+      const { mode } = await readJson(req);
+      if (!poller.setMode(mode)) throw new SessionError(`mode must be one of: ${MODES.join(', ')}`, 400);
+      json(res, 200, { mode: poller.mode });
+    },
     'GET /api/ping': (req, res) => json(res, 200, { ok: true }),
     'GET /api/status': (req, res) => json(res, 200, session.status()),
     'POST /api/connect': async (req, res) => json(res, 200, await session.connect(await readJson(req))),

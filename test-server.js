@@ -25,6 +25,8 @@ const FAKE_COMPONENTS = [
   { ID: 'MyGain', Name: 'MyGain', Type: 'gain', Properties: [], Controls: null, ControlSource: 2 },
   // S1: CONFIRMED AEC type string (ADR §Pins).
   { ID: 'Room1_AEC', Name: 'Room1_AEC', Type: 'acoustic_echo_canceler_simd', Properties: [{ Name: 'channel_count', Value: '2' }], Controls: null, ControlSource: 2 },
+  // S3: CONFIRMED Flex type string; emulation reports no properties for it.
+  { ID: 'Flex_In_Core-1', Name: 'Flex_In_Core-1', Type: 'io_card_flex_in_core_8flex', Properties: [], Controls: null, ControlSource: 2 },
 ];
 const FAKE_CONTROLS = {
   Room1_AEC: [
@@ -289,7 +291,7 @@ async function withRig(opts, fn, appOpts) {
       await call(app, 'POST', '/api/connect', { host: '127.0.0.1', port: fake.port });
       const r = await call(app, 'GET', '/api/components');
       assert.strictEqual(r.code, 200, JSON.stringify(r.body));
-      assert.deepStrictEqual(r.body.components.map((c) => [c.name, c.aecCandidate]), [['Room1_AEC', true], ['MyGain', false]]);
+      assert.deepStrictEqual(r.body.components.map((c) => [c.name, c.aecCandidate]), [['Room1_AEC', true], ['Flex_In_Core-1', false], ['MyGain', false]]);
       assert.ok(fake.methods.includes('Component.GetComponents'));
     });
   });
@@ -455,7 +457,16 @@ async function withRig(opts, fn, appOpts) {
       assert.deepStrictEqual(r.body.components.map((c) => c.name), ['Room1_AEC']);
       assert.strictEqual(r.body.components[0].properties.channel_count, '2');
       const all = await call(app, 'GET', '/api/roles/aec/candidates?all=1');
-      assert.deepStrictEqual(all.body.components.map((c) => c.name).sort(), ['MyGain', 'Room1_AEC']);
+      assert.deepStrictEqual(all.body.components.map((c) => c.name).sort(), ['Flex_In_Core-1', 'MyGain', 'Room1_AEC']);
+    });
+  });
+
+  await test('GET /api/roles/input/candidates → only the Flex input (S3)', async () => {
+    await withRig({}, async (app, fake) => {
+      await call(app, 'POST', '/api/connect', { host: '127.0.0.1', port: fake.port });
+      const r = await call(app, 'GET', '/api/roles/input/candidates');
+      assert.strictEqual(r.code, 200, JSON.stringify(r.body));
+      assert.deepStrictEqual(r.body.components.map((c) => c.name), ['Flex_In_Core-1']);
     });
   });
 
@@ -612,6 +623,58 @@ async function withRig(opts, fn, appOpts) {
     }, FAST);
   });
 
+  // --- S3: input stage + Monitor mode --------------------------------------------
+  const LEVEL3 = 'channel.3.digital.input.level';
+  const CLIP3 = 'channel.3.clip';
+  const inputRig = () => {
+    const r = defaultRig();
+    r.chains[0].input = { component: 'Flex_In_Core-1', channel: 3 };
+    return r;
+  };
+  const inputFinding = (snap, key) => snap.findings.find((f) => f.trigger && f.trigger.key === key);
+
+  await test('monitor mode: defaults to off; PUT /api/monitor/mode sets it; bad mode → 400', async () => {
+    await withRig({}, async (app) => {
+      assert.strictEqual((await monitor(app)).mode, 'off');
+      const r = await call(app, 'PUT', '/api/monitor/mode', { mode: 'talker' });
+      assert.deepStrictEqual([r.code, r.body], [200, { mode: 'talker' }]);
+      assert.strictEqual((await monitor(app)).mode, 'talker');
+      const bad = await call(app, 'PUT', '/api/monitor/mode', { mode: 'loud' });
+      assert.strictEqual(bad.code, 400);
+      assert.ok(/mode/.test(bad.body.error));
+      assert.strictEqual((await monitor(app)).mode, 'talker', 'unchanged after a bad PUT');
+    });
+  });
+
+  await test('monitor: input stage polled; talker mode −24 dBFS → warn naming input.gain; quiet mode → bad', async () => {
+    await withRig({}, async (app, fake) => {
+      await call(app, 'PUT', '/api/rig', inputRig());
+      fake.meters = { 'Flex_In_Core-1': { [LEVEL3]: -24, [CLIP3]: 0 } };
+      await connect(app, fake);
+      await wait(150);
+      let s = await monitor(app);
+      assert.deepStrictEqual(s.meters.map((m) => [m.key, m.value, m.stale]), [['input.level', -24, false], ['input.clip', 0, false]]);
+      assert.strictEqual(inputFinding(s, 'input.level'), undefined, 'off mode: no talker/noise advice');
+      await call(app, 'PUT', '/api/monitor/mode', { mode: 'talker' });
+      s = await monitor(app);
+      const f = inputFinding(s, 'input.level');
+      assert.strictEqual(f.level, 'warn');
+      assert.deepStrictEqual(f.adjust, [{ component: 'Flex_In_Core-1', pin: 'channel.3.input.gain', label: 'Input gain' }]);
+      await call(app, 'PUT', '/api/monitor/mode', { mode: 'quiet' });
+      assert.strictEqual(inputFinding(await monitor(app), 'input.level').level, 'bad');
+    }, FAST);
+  });
+
+  await test('monitor: clip → bad finding in off mode', async () => {
+    await withRig({}, async (app, fake) => {
+      await call(app, 'PUT', '/api/rig', inputRig());
+      fake.meters = { 'Flex_In_Core-1': { [LEVEL3]: -10, [CLIP3]: 1 } };
+      await connect(app, fake);
+      await wait(150);
+      assert.strictEqual(inputFinding(await monitor(app), 'input.clip').level, 'bad');
+    }, FAST);
+  });
+
   // --- S1: new shell (ADR-09) ------------------------------------------------
   await test('/ serves the Setup/Monitor shell; v1 simulator is gone', async () => {
     const app = await startApp();
@@ -624,6 +687,9 @@ async function withRig(opts, fn, appOpts) {
       // S2: Monitor tab — RMLR + ERLE meters, ELR placeholder (ADR-07), findings.
       assert.ok(/id="mon-rmlr"/.test(r.text) && /id="mon-erle"/.test(r.text) && /id="mon-findings"/.test(r.text));
       assert.ok(/needs a named output component/.test(r.text), 'ELR card placeholder');
+      // S3: input stage on Setup; input meter + talker/quiet mode switch on Monitor.
+      assert.ok(/id="input-comp"/.test(r.text) && /id="input-ch"/.test(r.text), 'input stage picker');
+      assert.ok(/id="mon-input"/.test(r.text) && /name="mon-mode"/.test(r.text), 'input meter + mode switch');
       assert.strictEqual((await getRaw(app, '/gain-model.js')).code, 404);
       assert.strictEqual((await getRaw(app, '/aec-erl-rmlr-emulator-v1.html')).code, 404, 'v1 reference not served');
     } finally {

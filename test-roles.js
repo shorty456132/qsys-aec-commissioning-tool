@@ -45,6 +45,27 @@ test('AEC role: knobs → ref.gain, min.ref.level, min.mic.level (CONFIRMED)', (
   assert.deepStrictEqual([k[1].lo, k[1].hi], [-100, 0]);
 });
 
+// --- S3: input stage -----------------------------------------------------------
+test('input role: typeMatch accepts the CONFIRMED Flex type, rejects others', () => {
+  const r = ROLES.input;
+  assert.ok(r.typeMatch.test('io_card_flex_in_core_8flex'));
+  assert.ok(!r.typeMatch.test('acoustic_echo_canceler_simd'));
+  assert.ok(!r.typeMatch.test('gain'));
+});
+
+test('input role: meters({channel:3}) → level (dBFS) + clip pins (CONFIRMED)', () => {
+  const m = ROLES.input.meters({ component: 'X', channel: 3 });
+  assert.deepStrictEqual(m.map((x) => x.pin), ['channel.3.digital.input.level', 'channel.3.clip']);
+  const [level, clip] = m;
+  assert.deepStrictEqual([level.key, level.unit, level.lo, level.hi], ['input.level', 'dBFS', -120, 20]);
+  assert.deepStrictEqual([clip.key, clip.lo, clip.hi], ['input.clip', 0, 1]);
+});
+
+test('input role: knobs → channel.N.input.gain −100…+20 (CONFIRMED)', () => {
+  const k = ROLES.input.knobs({ component: 'X', channel: 2 });
+  assert.deepStrictEqual(k.map((x) => [x.key, x.pin, x.lo, x.hi]), [['input.gain', 'channel.2.input.gain', -100, 20]]);
+});
+
 test('defaultRig → one empty chain, empty field', () => {
   const r = defaultRig();
   assert.strictEqual(r.chains.length, 1);

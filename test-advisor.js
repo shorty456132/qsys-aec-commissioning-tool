@@ -3,7 +3,7 @@
 // Run: node test-advisor.js
 
 const assert = require('assert');
-const { advise } = require('./advisor');
+const { advise, MODES } = require('./advisor');
 const { meterList } = require('./meters');
 const { defaultRig } = require('./roles');
 
@@ -83,6 +83,84 @@ test('advise: finding ids are unique per chain', () => {
   assert.strictEqual(f.length, 2);
   assert.notStrictEqual(f[0].id, f[1].id);
   assert.strictEqual(f[1].adjust[0].component, 'Room2_AEC');
+});
+
+// --- S3: input stage ---------------------------------------------------------------
+const inRig = (channel = 3) => {
+  const r = defaultRig();
+  r.chains[0].input = { component: 'Flex_In_Core-1', channel };
+  return r;
+};
+const GAIN3 = { component: 'Flex_In_Core-1', pin: 'channel.3.input.gain', label: 'Input gain' };
+const byKey = (findings, key) => findings.filter((f) => f.trigger && f.trigger.key === key);
+const level = (v, mode, clip = 0) => byKey(advise(inRig(), { 'chain-1': { 'input.level': v, 'input.clip': clip } }, { mode }), 'input.level');
+const lvl = (v, mode) => { const f = level(v, mode); return f.length ? f[0].level : null; };
+
+test('meterList: input stage comes before AEC (signal order), level + clip', () => {
+  const r = inRig(3);
+  r.chains[0].aec = { component: 'Room1_AEC', channel: 1 };
+  assert.deepStrictEqual(meterList(r).map((x) => [x.role, x.key]), [
+    ['input', 'input.level'], ['input', 'input.clip'], ['aec', 'aec.rmlr'], ['aec', 'aec.erle'],
+  ]);
+});
+
+test('advise: clip → bad, adjust input.gain, in every mode (incl. no mode)', () => {
+  for (const mode of [undefined, 'off', 'talker', 'quiet']) {
+    const f = byKey(advise(inRig(), { 'chain-1': { 'input.level': -18, 'input.clip': 1 } }, { mode }), 'input.clip');
+    assert.strictEqual(f.length, 1, String(mode));
+    assert.strictEqual(f[0].level, 'bad');
+    assert.deepStrictEqual(f[0].adjust, [GAIN3]);
+    assert.strictEqual(f[0].source, 'doc:AEC_Gain_Structure.md');
+    assert.ok(/lower/i.test(f[0].text) && /channel\.3\.input\.gain/.test(f[0].text), f[0].text);
+  }
+  assert.deepStrictEqual(byKey(advise(inRig(), { 'chain-1': { 'input.clip': 0 } }), 'input.clip'), [], 'no clip → silent');
+});
+
+test('advise: peak > −3 dBFS → warn "lower" in every mode; −3 itself is not a peak', () => {
+  for (const mode of ['off', 'talker', 'quiet']) {
+    const [f] = level(-2.9, mode);
+    assert.strictEqual(f.level, 'warn', mode);
+    assert.ok(/lower/i.test(f.text) && /-3 dBFS/.test(f.text), f.text);
+    assert.deepStrictEqual(f.adjust, [GAIN3]);
+  }
+  assert.strictEqual(lvl(-3, 'off'), null, 'off mode: −3 → nothing');
+});
+
+test('advise: talker window −20…−15 edges ok; below → warn raise; above → warn lower', () => {
+  assert.deepStrictEqual([lvl(-20, 'talker'), lvl(-15, 'talker'), lvl(-17.5, 'talker')], ['ok', 'ok', 'ok']);
+  const [lo] = level(-20.1, 'talker');
+  const [hi] = level(-14.9, 'talker');
+  assert.deepStrictEqual([lo.level, hi.level], ['warn', 'warn']);
+  assert.ok(/raise/i.test(lo.text) && /lower/i.test(hi.text), lo.text + ' | ' + hi.text);
+  assert.deepStrictEqual(lo.adjust, [GAIN3]);
+  assert.deepStrictEqual(level(-17, 'talker')[0].adjust, []);
+  assert.strictEqual(lo.source, 'doc:AEC_Gain_Structure.md');
+});
+
+test('advise: quiet room ≤ −40 ok; −40…−35 warn; > −35 bad; never says lower the gain', () => {
+  assert.deepStrictEqual([lvl(-40, 'quiet'), lvl(-39.9, 'quiet'), lvl(-35, 'quiet'), lvl(-34.9, 'quiet')],
+    ['ok', 'warn', 'warn', 'bad']);
+  const [f] = level(-30, 'quiet');
+  assert.deepStrictEqual(f.adjust, [], 'gain does not fix SNR (doc)');
+  assert.ok(/noise reduction/i.test(f.text), f.text);
+  assert.strictEqual(f.source, 'doc:AEC_Gain_Structure.md');
+});
+
+test('advise: one input.level finding per chain (peak wins over the mode rule)', () => {
+  assert.strictEqual(level(-2, 'talker').length, 1);
+  assert.strictEqual(level(-2, 'quiet').length, 1);
+  assert.ok(/-3 dBFS/.test(level(-2, 'quiet')[0].text));
+});
+
+test('advise: off / no mode → no talker or noise findings; no input stage or value → none', () => {
+  assert.strictEqual(lvl(-30, 'off'), null);
+  assert.strictEqual(lvl(-30, undefined), null);
+  assert.deepStrictEqual(advise(inRig(), {}, { mode: 'talker' }), []);
+  assert.deepStrictEqual(advise(defaultRig(), { 'chain-1': { 'input.level': -30, 'input.clip': 1 } }, { mode: 'talker' }), []);
+});
+
+test('advise: MODES lists the Monitor modes', () => {
+  assert.deepStrictEqual(MODES, ['off', 'talker', 'quiet']);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

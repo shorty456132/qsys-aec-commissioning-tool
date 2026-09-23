@@ -66,6 +66,14 @@ server-side, unit-tested. Every finding carries its trigger value, the
 control(s) to adjust, and `source`: `doc:<file>` or `heuristic`, so the tech
 knows which advice is from Q-SYS guidance and which is our own rule of thumb.
 
+**ADR-14 — Monitor mode says what the room is doing (S3).** One input meter
+can't tell speech from room noise, and the doc takes them as separate
+measurements (talking vs. quiet). The tech sets the mode on the Monitor tab:
+`off` | `talker` | `quiet` → `advise(rig, values, {mode})`. It's session state
+on the poller (`PUT /api/monitor/mode`), not saved in `rig.json`. Clip and
+peak rules apply in every mode. Rejected: a rolling min/max, because the
+gaps between words aren't the room's noise floor.
+
 **ADR-13 — Emulation doesn't meter.** CONFIRMED 2026-09-22: every meter
 in emulation stays static (RMLR 0, ERLE 0, inputs −120). Emulation is used for
 connect, pin names/types/ranges. Meter logic is built against the fake QRC
@@ -102,15 +110,18 @@ AEC — type `acoustic_echo_canceler_simd` (props incl. `tail_length`, `channel_
 | `min.ref.level` | Float RW | −100…0 dB | "Hold If Ref Level Below" |
 | `min.mic.level` | Float RW | −100…0 dB | "Hold If Mic Level Below" |
 
-Flex input — type `io_card_flex_in_core_8flex` (8 ch)
+Flex input — type `io_card_flex_in_core_8flex` (8 ch; **no** `channel_count` property)
 | Pin | Type / dir | Range | Role |
 |---|---|---|---|
-| `channel.N.digital.input.level` | Float RO | −120…+20 dB | Input level meter |
-| `channel.N.clip` | Bool RO | — | Clip |
+| `channel.N.digital.input.level` | Float RO | −120…+20 dB | Input level meter (treated as dBFS) |
+| `channel.N.clip` | Bool RO | — | Clip (GetControls → `false`; **Poll → 0/1**) |
 | `channel.N.input.gain` | Float RW | −100…+20 dB | Input gain |
+| `channel.N.clip.hold` | Bool RW | — | Clip hold (unused; Parking Lot) |
 
 - `NEEDS-TEST:` RMLR sign convention (does +ve mean ref hotter than mic?) —
   needs a Core with audio.
+- `NEEDS-TEST:` that `digital.input.level` reads dBFS (0 = full scale) on a
+  live Core. The input rules assume it does (S10).
 - `NEEDS-TEST:` type strings + pins for Mic/Line In, Dante Rx/Tx, Line Out,
   Gain, Matrix Mixer crosspoints, Gating Automixer (check each in emulation
   in its own slice).
@@ -119,7 +130,7 @@ Flex input — type `io_card_flex_in_core_8flex` (8 ch)
 | Rule | Threshold | Source |
 |---|---|---|
 | Talker level at mic input | −20…−15 dBFS | doc: `AEC_Gain_Structure.md` |
-| Room noise at mic input | ≤ −35…−40 dBFS | doc: `AEC_Gain_Structure.md` |
+| Room noise at mic input | ≤ −40 ok, ≤ −35 warn, else bad (quiet mode) | doc: `AEC_Gain_Structure.md` ("at most between about −35 and −40") |
 | Speech-to-noise | ≥ 15 dB min, 25 dB target | doc: `AEC_Gain_Structure.md` |
 | Far-end level in room | 65…70 dBA | doc: `AEC_Gain_Structure.md` |
 | RMLR | ≈ 0 dB (warn beyond ±3) | doc: Gain Structure / Troubleshooting; ±3 = heuristic (v1) |
@@ -133,10 +144,11 @@ Flex input — type `io_card_flex_in_core_8flex` (8 ch)
 ---
 
 ## Resume notes
-1. The v2 plan is in TASKS.md. S1 + S2 are done → next is **S3** (S4–S9 also
+1. The v2 plan is in TASKS.md. S1–S3 are done → next is **S4** (S5–S9 also
    only need S2). The contracts at the top of TASKS are fixed; change them only
    by editing both files.
-2. `npm test` is 76 green after S2. Tests pass `rigPath` (and `pollMs: 30`) to
+2. `npm test` is 91 green after S3. The Setup stage editor in `app.js` is
+   generic: add a role id to `STAGE_ROLES` + a `data-role` row in the HTML. Tests pass `rigPath` (and `pollMs: 30`) to
    `createApp` so they never touch the repo's `rig.json`. A new metered role
    only needs `roles.js` `meters()` — `meterList` + the poller pick it up.
 3. Emulation: `127.0.0.1:1710`, design = `200ms_Acoustic_Echo_Canceler` +

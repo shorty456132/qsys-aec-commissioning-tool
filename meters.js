@@ -7,7 +7,7 @@
 // goes through `session.call` (ADR-03).
 
 const { ROLES, STAGES } = require('./roles');
-const { advise } = require('./advisor');
+const { advise, MODES } = require('./advisor');
 
 const GROUP_ID = 'aec-commissioning-meters';
 const DEFAULT_POLL_MS = 500;
@@ -36,6 +36,7 @@ class MeterPoller {
     this.meters = [];
     this.cache = new Map(); // cacheKey → {value, string}
     this.error = null;      // last poll/rebuild failure; cleared by a good poll
+    this.mode = 'off';      // S3 — which input rule the advisor applies (MODES)
     this._dirty = true;     // group must be (re)built before the next Poll
     this._built = false;    // group exists on the current connection
     this._running = false;
@@ -49,6 +50,13 @@ class MeterPoller {
     this.meters = meterList(rig);
     this._dirty = true;
     this.error = null; // a poll/rebuild failure re-surfaces on the next tick
+  }
+
+  // S3 — returns false (and changes nothing) for an unknown mode.
+  setMode(mode) {
+    if (!MODES.includes(mode)) return false;
+    this.mode = mode;
+    return true;
   }
 
   // A rig that can't be loaded is surfaced, not polled.
@@ -132,7 +140,8 @@ class MeterPoller {
       };
     });
     const error = this.error || (state === 'disconnected' ? this.session.error : null);
-    return { t: Date.now(), state, error, meters, findings: this.rig ? advise(this.rig, values) : [] };
+    const findings = this.rig ? advise(this.rig, values, { mode: this.mode }) : [];
+    return { t: Date.now(), state, mode: this.mode, error, meters, findings };
   }
 }
 

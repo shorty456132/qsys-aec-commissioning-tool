@@ -7,7 +7,7 @@
   const FALLBACK_CHANNELS = 16; // when a component has no channel_count property
 
   let rig = null;        // last rig loaded from / saved to the server
-  let candidates = [];   // [{name, type, properties}] for the AEC dropdown
+  const candidates = {};  // role → [{name, type, properties}] for that stage's dropdown
   let lastState = null;
   let busy = false;
 
@@ -47,7 +47,7 @@
     $('c-disconnect').disabled = busy || !up;
     const changed = st.state !== lastState && (st.state === 'connected' || lastState === 'connected');
     lastState = st.state;
-    if (changed) loadCandidates();
+    if (changed) loadAllCandidates();
   }
 
   async function refreshStatus() {
@@ -75,61 +75,70 @@
     refreshStatus();
   });
 
-  // --- chain editor: AEC stage (S1) ----------------------------------------------
+  // --- chain editor: one row per stage (S1 AEC, S3 input) ---------------------------
+  // Each row has #<role>-comp, #<role>-ch and #<role>-all; the role id is the chain key.
+  const STAGE_ROLES = ['input', 'aec'];
   const chain = () => rig.chains[0];
 
-  function channelCount(name) {
-    const c = candidates.find((x) => x.name === name);
+  function channelCount(role, name) {
+    const c = candidates[role].find((x) => x.name === name);
     const n = c && parseInt(c.properties && c.properties.channel_count, 10);
     return n > 0 ? n : FALLBACK_CHANNELS;
   }
 
-  function renderAec() {
-    const sel = chain().aec;
+  function renderStage(role) {
+    const sel = chain()[role];
     const saved = sel ? sel.component : '';
-    const names = candidates.map((c) => c.name);
-    let opts = '<option value="">(none)</option>' + candidates.map((c) =>
+    const names = candidates[role].map((c) => c.name);
+    let opts = '<option value="">(none)</option>' + candidates[role].map((c) =>
       '<option value="' + esc(c.name) + '">' + esc(c.name) + ' — ' + esc(c.type) + '</option>').join('');
     if (saved && !names.includes(saved)) {
       const why = lastState === 'connected' ? 'not in this design' : 'saved';
       opts += '<option value="' + esc(saved) + '">' + esc(saved) + ' (' + why + ')</option>';
     }
-    $('aec-comp').innerHTML = opts;
-    $('aec-comp').value = saved;
-    renderChannels(sel ? sel.channel : 1);
+    $(role + '-comp').innerHTML = opts;
+    $(role + '-comp').value = saved;
+    renderChannels(role, sel ? sel.channel : 1);
   }
 
-  function renderChannels(want) {
-    const comp = $('aec-comp').value;
-    const n = Math.max(channelCount(comp), want || 1);
+  function renderChannels(role, want) {
+    const comp = $(role + '-comp').value;
+    const n = Math.max(channelCount(role, comp), want || 1);
     let opts = '';
     for (let i = 1; i <= n; i++) opts += '<option>' + i + '</option>';
-    $('aec-ch').innerHTML = opts;
-    $('aec-ch').value = String(want || 1);
-    $('aec-ch').disabled = !comp;
+    $(role + '-ch').innerHTML = opts;
+    $(role + '-ch').value = String(want || 1);
+    $(role + '-ch').disabled = !comp;
   }
 
-  async function loadCandidates() {
-    candidates = [];
+  async function loadCandidates(role) {
+    candidates[role] = [];
     if (lastState === 'connected') {
       try {
-        const r = await api('GET', '/api/roles/aec/candidates' + ($('aec-all').checked ? '?all=1' : ''));
-        candidates = r.components;
+        const r = await api('GET', '/api/roles/' + role + '/candidates' + ($(role + '-all').checked ? '?all=1' : ''));
+        candidates[role] = r.components;
         $('rig-msg').textContent = '';
       } catch (e) {
         $('rig-msg').innerHTML = '<span class="err">' + esc(e.message) + '</span>';
       }
     }
-    if (rig) renderAec();
+    if (rig) renderStage(role);
   }
 
-  $('aec-all').addEventListener('change', loadCandidates);
-  $('aec-comp').addEventListener('change', () => renderChannels(1));
+  const loadAllCandidates = () => STAGE_ROLES.forEach(loadCandidates);
+
+  for (const role of STAGE_ROLES) {
+    candidates[role] = [];
+    $(role + '-all').addEventListener('change', () => loadCandidates(role));
+    $(role + '-comp').addEventListener('change', () => renderChannels(role, 1));
+  }
 
   $('rig-save').addEventListener('click', async () => {
-    const comp = $('aec-comp').value;
     const next = JSON.parse(JSON.stringify(rig));
-    next.chains[0].aec = comp ? { component: comp, channel: Number($('aec-ch').value) } : null;
+    for (const role of STAGE_ROLES) {
+      const comp = $(role + '-comp').value;
+      next.chains[0][role] = comp ? { component: comp, channel: Number($(role + '-ch').value) } : null;
+    }
     $('rig-msg').textContent = 'Saving…';
     try {
       rig = await api('PUT', '/api/rig', next);
@@ -143,7 +152,7 @@
     try {
       rig = await api('GET', '/api/rig');
       $('chain-label').textContent = chain().label;
-      renderAec();
+      STAGE_ROLES.forEach(renderStage);
     } catch (e) {
       $('rig-msg').innerHTML = '<span class="err">' + esc(e.message) + '</span>';
       $('rig-save').disabled = true; // never overwrite a rig.json we couldn't read
@@ -156,8 +165,10 @@
   let monTimer = null;
 
   // Bar meter. `centred` bars grow from 0 in the middle (RMLR); others from lo.
-  // Values past the range are drawn pinned at the edge and flagged.
-  function renderMeter(card, m, centred) {
+  // `lo`/`hi` override the meter's range for display (the input bar shows −60…0
+  // of −120…+20); `warn(v)` turns the bar amber. Values past the displayed range
+  // are drawn pinned at the edge and flagged.
+  function renderMeter(card, m, { centred = false, lo, hi, warn = () => false } = {}) {
     card.classList.toggle('stale', !m || m.stale);
     const fill = card.querySelector('.fill');
     if (!m || m.value === null) {
@@ -165,15 +176,16 @@
       card.querySelector('.val').textContent = '—';
       return;
     }
-    const span = m.hi - m.lo;
-    const clamped = Math.min(m.hi, Math.max(m.lo, m.value));
-    const pos = (clamped - m.lo) / span * 100;
-    const zero = centred ? (0 - m.lo) / span * 100 : 0;
+    lo = lo === undefined ? m.lo : lo;
+    hi = hi === undefined ? m.hi : hi;
+    const span = hi - lo;
+    const clamped = Math.min(hi, Math.max(lo, m.value));
+    const pos = (clamped - lo) / span * 100;
+    const zero = centred ? (0 - lo) / span * 100 : 0;
     fill.style.left = Math.min(pos, zero) + '%';
     fill.style.width = Math.abs(pos - zero) + '%';
-    const out = centred && Math.abs(m.value) > 3;
-    fill.style.background = m.stale ? 'var(--gray)' : out ? 'var(--amber)' : 'var(--green)';
-    const pinned = m.value <= m.lo || m.value >= m.hi ? ' (pinned)' : '';
+    fill.style.background = m.stale ? 'var(--gray)' : warn(m.value) ? 'var(--amber)' : 'var(--green)';
+    const pinned = m.value <= lo || m.value >= hi ? ' (pinned)' : '';
     const v = (centred && m.value > 0 ? '+' : '') + m.value.toFixed(1) + ' ' + m.unit;
     card.querySelector('.val').textContent = v + pinned + (m.stale ? ' · stale' : '');
   }
@@ -181,10 +193,14 @@
   function renderMonitor(s) {
     const where = s.error ? ' <span class="err">(' + esc(s.error) + ')</span>' : '';
     $('mon-status').innerHTML = '<i style="background:' + (COLORS[s.state] || COLORS.disconnected) + '"></i><span>' +
-      esc(s.state) + where + (s.meters.length ? '' : ' — no metered stage set; pick an AEC on the Setup tab') + '</span>';
+      esc(s.state) + where + (s.meters.length ? '' : ' — no metered stage set; pick an input or AEC on the Setup tab') + '</span>';
     const byKey = (k) => s.meters.find((m) => m.key === k);
-    renderMeter($('mon-rmlr'), byKey('aec.rmlr'), true);
-    renderMeter($('mon-erle'), byKey('aec.erle'), false);
+    renderMeter($('mon-input'), byKey('input.level'), { lo: -60, hi: 0, warn: (v) => v > -3 });
+    const clip = byKey('input.clip');
+    $('mon-clip').classList.toggle('on', !!(clip && !clip.stale && clip.value >= 0.5));
+    renderMeter($('mon-rmlr'), byKey('aec.rmlr'), { centred: true, warn: (v) => Math.abs(v) > 3 });
+    renderMeter($('mon-erle'), byKey('aec.erle'));
+    if (s.mode) for (const r of document.querySelectorAll('input[name="mon-mode"]')) r.checked = r.value === s.mode;
     $('mon-findings').innerHTML = s.findings.length
       ? s.findings.map((f) => '<li><i style="background:' + (LEVEL_COLORS[f.level] || COLORS.disconnected) + '"></i><span>' +
           esc(f.text) + '</span><span class="src">' + esc(f.source) + '</span></li>').join('')
@@ -194,6 +210,14 @@
   async function pollMonitor() {
     try { renderMonitor(await api('GET', '/api/monitor')); }
     catch (e) { renderMonitor({ state: 'disconnected', error: 'Tool server unreachable', meters: [], findings: [] }); }
+  }
+
+  // S3 — talker / quiet-room mode picks which input rule the advisor applies.
+  for (const r of document.querySelectorAll('input[name="mon-mode"]')) {
+    r.addEventListener('change', async () => {
+      try { await api('PUT', '/api/monitor/mode', { mode: r.value }); } catch (e) { /* next poll shows the server's mode */ }
+      pollMonitor();
+    });
   }
 
   function startMonitor() {

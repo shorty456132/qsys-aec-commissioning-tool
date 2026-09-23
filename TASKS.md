@@ -41,10 +41,11 @@ Role = { id, label, typeMatch: RegExp,         // dropdown filter; "show all" fa
 
 // Monitor snapshot — GET /api/monitor, short-polled by the UI (ADR-11)
 Snapshot = { t, state, error: string|null,       // poll/rebuild/rig error (S2)
+             mode: 'off'|'talker'|'quiet',      // S3 — PUT /api/monitor/mode {mode}
              meters: [{ key, chain, role, component, pin, label,
              value, string, unit, lo, hi, stale }], findings: [Finding] }
 
-// Finding — advisor.js, pure: advise(rig, meterValues) -> [Finding] (ADR-12)
+// Finding — advisor.js, pure: advise(rig, meterValues, {mode}) -> [Finding] (ADR-12)
 Finding = { id, level: 'ok'|'warn'|'bad', text,
             trigger: { key, value } | null,
             adjust: [{ component, pin, label }],
@@ -54,14 +55,6 @@ Finding = { id, level: 'ok'|'warn'|'bad', text,
 ---
 
 ## To Do
-
-**S3 — Input stage (Mic/Line, Flex, Dante in)** *(needs S2)*
-Role + dropdown + channel; input level meter + clip; rules: talker window
-−20…−15 dBFS, noise at the input ≤ −35…−40 dBFS, peak/clip → adjust
-`input.gain`.
-Tests first: Flex pins CONFIRMED (`channel.N.digital.input.level`, `.clip`,
-`.input.gain`); each rule's ok/warn/bad edges; clip → bad.
-`NEEDS-TEST:` Mic/Line In and Dante Rx type strings + pin names (emulation).
 
 **S4 — Field readings** *(needs S2)*
 The Setup tab gets inputs for seat SPL (several positions), noise floor (dB
@@ -109,6 +102,13 @@ live ranges).
 - (none)
 
 ## Done
+- **S3 — Input stage (Flex).** `input` role (`/^io_card_flex_in/i`; level,
+  clip, knob `input.gain`). Monitor mode Off / Talker test / Quiet room (the
+  tech says what's happening; one meter can't tell speech from noise):
+  talker −20…−15 warn raise/lower; quiet ≤ −40 ok, ≤ −35 warn, else bad (no
+  gain advice: gain doesn't fix SNR); any mode: > −3 warn, clip → bad. Setup
+  stage editor made generic per role. Emulation acceptance passed (API).
+  `NEEDS-TEST:` Mic/Line In + Dante Rx types/pins (not in the design) → "show all".
 - **S2 — Monitor tracer: AEC meters + first finding.** `meters.js`
   (`meterList`, `MeterPoller`: one fixed-Id change group, `Clear` + re-add
   on a rig change, 500 ms chained Poll, value cache), `advisor.js` (RMLR ±3
@@ -134,6 +134,13 @@ live ranges).
   `Component.Set` reply question)
 - UI for several chains (the contract already allows it)
 - QWRC / remote Core (ADR-02)
+- Input "no signal" rule: talker mode at ≈ −120 dBFS currently says "raise
+  input gain"; a dead input should say check mic / phantom / mute instead
+  (seen in S3 emulation acceptance)
+- Input rule for Mic/Line In + Dante Rx once their pins are CONFIRMED (add a
+  component with each to the emulation design)
+- Clip latch: a 500 ms poll can miss a short clip; `channel.N.clip.hold` (RW
+  Bool) exists on the Flex
 
 ---
 
@@ -153,3 +160,8 @@ live ranges).
   re-add works; an unknown component → QRC error 7 (surfaced, retried each
   tick). Snapshot gained `error` (contract updated). The Monitor UI hasn't
   been clicked through by hand yet. `NEEDS-TEST:` RMLR sign → S10.
+- **2026-09-23 (S3):** done, `npm test` 91 green. Talker/noise split by a
+  tech-set Monitor mode (Andrew's call) → contract: `advise(…, {mode})`,
+  `Snapshot.mode`. CONFIRMED: Poll returns the clip Bool as 0/1; the Flex has
+  no `channel_count` property (UI falls back to 16). Emulation has no Mic/Line
+  or Dante component. UI not clicked through by hand yet.
