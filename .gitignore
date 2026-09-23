@@ -1,0 +1,14 @@
+# Dependencies (project has none, but guard against accidental installs)
+node_modules/
+
+# Per-site setup — chain selections + field readings (ADR-10)
+rig.json
+
+# Logs / OS / editor
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/

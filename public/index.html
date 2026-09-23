@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AEC Commissioning Tool</title>
+<style>
+:root{
+  --bg:#1b1c1e;--panel:#26282b;--edge:#8a8d92;--txt:#e6e7e9;--sub:#a9acb1;--mute:#6f7277;
+  --box:#f4f5f6;--boxtxt:#111;--track:#101113;--knob:#3d63b3;--knobhi:#5b82d6;
+  --blue:#3b8ee0;--green:#3fbf5f;--amber:#e3a52a;--red:#e04444;--gray:#6c6f74;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--txt);font:13px/1.45 "Segoe UI",Roboto,Arial,sans-serif;padding:20px}
+h1{font-size:18px;font-weight:500;margin:0 0 4px}
+.sub{color:var(--sub);margin:0 0 14px;font-size:12px}
+.modebar{display:flex;gap:8px;align-items:center;margin:0 0 14px}
+.modebar .seg{display:flex;border:1px solid #55585d;border-radius:6px;overflow:hidden}
+.modebar .seg button{border:none;border-radius:0;padding:5px 12px;font-size:12px;background:transparent;color:var(--txt);cursor:pointer}
+.modebar .seg button.on{background:var(--knob);border-color:var(--knobhi)}
+#conn-banner{color:var(--sub)}
+.presets{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 18px}
+button{background:#33363a;color:var(--txt);border:1px solid #55585d;border-radius:6px;padding:6px 12px;font:inherit;cursor:pointer}
+button:hover{background:#3d4045}
+button.on{background:var(--knob);border-color:var(--knobhi)}
+button:disabled{opacity:.5;cursor:default}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:22px 16px;align-items:start}
+.grp{position:relative;border:1.5px solid var(--edge);border-radius:12px;padding:22px 12px 12px;background:var(--panel)}
+.grp>.tab{position:absolute;top:-10px;left:10px;background:var(--bg);padding:0 8px;font-size:13px;color:var(--txt);border-radius:4px}
+.grp>.note{font-size:11px;color:var(--mute);margin:8px 2px 0}
+.row{display:flex;gap:10px;justify-content:space-around;flex-wrap:wrap}
+.strip{display:flex;flex-direction:column;align-items:center;gap:6px;width:74px}
+.strip .lbl{font-size:11.5px;text-align:center;min-height:32px;display:flex;align-items:flex-end;justify-content:center;color:var(--txt)}
+input[type=range].fad{writing-mode:vertical-lr;direction:rtl;width:26px;height:150px;margin:0;background:transparent;-webkit-appearance:none;appearance:none;cursor:pointer}
+input[type=range].fad::-webkit-slider-runnable-track{width:6px;background:#c9ccd1;border-radius:3px}
+input[type=range].fad::-moz-range-track{width:6px;background:#c9ccd1;border-radius:3px}
+input[type=range].fad::-webkit-slider-thumb{-webkit-appearance:none;width:26px;height:16px;border-radius:5px;background:var(--knob);border:1px solid var(--knobhi);margin-left:-10px}
+input[type=range].fad::-moz-range-thumb{width:24px;height:14px;border-radius:5px;background:var(--knob);border:1px solid var(--knobhi)}
+.vbox{width:70px;background:var(--box);color:var(--boxtxt);border:none;border-radius:3px;text-align:center;font:12px/1 "Segoe UI",Arial,sans-serif;padding:5px 2px}
+.meter{position:relative;width:30px;height:150px;background:var(--track);border:1px solid #3b3e42;border-radius:4px;overflow:hidden}
+.meter .f{position:absolute;left:0;right:0;bottom:0;transition:height .12s,bottom .12s,background .12s}
+.meter .tgt{position:absolute;left:0;right:0;height:2px;background:var(--red);z-index:2}
+.scale{position:relative;height:150px;width:26px;font-size:10px;color:var(--mute)}
+.scale span{position:absolute;right:0;transform:translateY(50%)}
+.mwrap{display:flex;gap:3px;align-items:flex-start}
+.led{width:34px;height:14px;border-radius:3px;border:1px solid #444;background:#3a2a2e}
+.seg{display:flex;border:1px solid #55585d;border-radius:6px;overflow:hidden}
+.seg button{border:none;border-radius:0;padding:5px 10px;font-size:12px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:22px 0 12px}
+.card{background:var(--panel);border:1px solid #3b3e42;border-radius:10px;padding:10px 14px}
+.card .k{font-size:12px;color:var(--sub)}
+.card .v{font-size:24px;font-weight:500;font-variant-numeric:tabular-nums}
+#status div{display:flex;gap:9px;align-items:flex-start;margin:4px 0}
+#status i{width:9px;height:9px;border-radius:50%;margin-top:5px;flex:none}
+.foot{color:var(--mute);font-size:11px;margin-top:18px}
+.hidden{display:none}
+.connform{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin:0 0 12px}
+.connform label{display:flex;flex-direction:column;gap:3px;font-size:11.5px;color:var(--sub)}
+.connform input{background:var(--box);color:var(--boxtxt);border:none;border-radius:3px;padding:6px 8px;font:inherit}
+.connstatus{display:flex;gap:9px;align-items:center;margin:0 0 12px}
+.connstatus i{width:10px;height:10px;border-radius:50%;flex:none}
+.disco .note{font-size:11px;color:var(--mute)}
+.discobar{display:flex;gap:10px;align-items:center;margin:0 0 10px}
+.discogrid{display:grid;grid-template-columns:minmax(200px,280px) 1fr;gap:14px;align-items:start}
+@media (max-width:700px){.discogrid{grid-template-columns:1fr}}
+.complist{display:flex;flex-direction:column;gap:4px;max-height:60vh;overflow:auto}
+.complist button{text-align:left;display:flex;justify-content:space-between;gap:8px}
+.complist .t{color:var(--sub);font-size:11px}
+.badge{font-size:10.5px;padding:1px 6px;border-radius:8px;background:var(--amber);color:#111;white-space:nowrap}
+.ctrlwrap{overflow-x:auto}
+.ctrls{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
+.ctrls th,.ctrls td{text-align:left;padding:4px 8px;border-bottom:1px solid #3b3e42;white-space:nowrap}
+.ctrls th{color:var(--sub);font-weight:500;font-size:12px}
+</style>
+</head>
+<body>
+<h1>AEC commissioning tool</h1>
+<p class="sub">RMLR / ELR review on the AEC block — simulator and live modes share the same issue rules.</p>
+
+<div class="modebar">
+  <div class="seg">
+    <button id="mode-sim" class="on">Simulator</button>
+    <button id="mode-live">Live</button>
+  </div>
+  <span id="conn-banner"></span>
+</div>
+
+<div id="sim-view">
+  <p class="sub">Echo-only condition: far-end / reinforced source playing out the speakers, no talker on the listening mic. Double-click any fader to reset it to its default. Type a value in any box and press Enter.</p>
+
+  <div class="presets">
+    <button data-p="reset">Reset</button>
+    <button data-p="tuned">Tuned room</button>
+    <button data-p="hotamp">Hot amp</button>
+    <button data-p="distant">Distant mic</button>
+    <button data-p="starved">Starved input</button>
+    <button data-p="pretap">Pre-gain tap mismatch</button>
+  </div>
+
+  <div class="grid">
+    <div class="grp"><span class="tab">Source</span>
+      <div class="row" id="g-src"></div>
+      <p class="note">Far-end receive, or a reinforced mic's direct out, feeding the room.</p>
+    </div>
+    <div class="grp"><span class="tab">Output (to amp)</span>
+      <div class="row" id="g-out"></div>
+    </div>
+    <div class="grp"><span class="tab">Mixer — Ref WM crosspoint</span>
+      <div class="row" id="g-mix"></div>
+      <div style="display:flex;justify-content:center;align-items:center;gap:8px;margin-top:10px">
+        <span style="font-size:12px;color:var(--sub)">Reference tap</span>
+        <div class="seg"><button id="tap-post" class="on">Post output gain</button><button id="tap-pre">Pre</button></div>
+      </div>
+    </div>
+    <div class="grp"><span class="tab">Canceler</span>
+      <div class="row" id="g-aec"></div>
+    </div>
+    <div class="grp"><span class="tab">Adaptive Filter</span>
+      <div class="row" id="g-hold"></div>
+      <div style="display:flex;justify-content:center;align-items:center;gap:8px;margin-top:10px">
+        <span style="font-size:12px;color:var(--sub)">Filter adapting</span><div class="led" id="led"></div>
+      </div>
+    </div>
+    <div class="grp"><span class="tab">Input 1 (Dante RX)</span>
+      <div class="row" id="g-in"></div>
+    </div>
+    <div class="grp"><span class="tab">Room (field side)</span>
+      <div class="row" id="g-room"></div>
+      <p class="note">Not visible from the Core. Loss = distance, placement, pattern, RT60.</p>
+    </div>
+  </div>
+
+  <div class="cards">
+    <div class="card"><div class="k">ERL (room return loss)</div><div class="v" id="c-erl"></div></div>
+    <div class="card"><div class="k">RMLR (target 0dB)</div><div class="v" id="c-rmlr"></div></div>
+    <div class="card"><div class="k">Talker SNR</div><div class="v" id="c-snr"></div></div>
+    <div class="card"><div class="k">Speaker SPL at seat</div><div class="v" id="c-spl"></div></div>
+  </div>
+  <div id="status"></div>
+  <p class="foot">Simplified model for intuition: mic calibrated so a 65 dB SPL talker reads −20 dBFS at 0dB input gain; room noise 40 dB SPL; 0 dBFS drive at 0dB amp gain ≈ 100 dB SPL at the speaker. Directions of change match real systems; absolute values won't match a specific room. Fader ranges follow Q-SYS gain controls (−100 to +20 dB); amp and room values are field-side estimates.</p>
+</div>
+
+<div id="live-view" class="hidden">
+  <p class="sub">Connect to Designer (emulation) or a deployed Core over QRC. One connection at a time — this tool is the only writer.</p>
+  <form id="conn-form" class="connform" autocomplete="off">
+    <label>Host <input id="c-host" value="127.0.0.1" required></label>
+    <label>Port <input id="c-port" value="1710" inputmode="numeric" size="6"></label>
+    <label>User <input id="c-user" placeholder="(optional)"></label>
+    <label>Password <input id="c-pass" type="password" placeholder="(optional)"></label>
+    <button id="c-connect" type="submit">Connect</button>
+    <button id="c-disconnect" type="button">Disconnect</button>
+  </form>
+  <div id="conn-status" class="connstatus"></div>
+  <div class="disco">
+    <div class="discobar">
+      <button id="d-scan" type="button" disabled>Discover components</button>
+      <span id="d-msg" class="sub" style="margin:0"></span>
+    </div>
+    <div class="discogrid">
+      <div id="d-comps" class="complist"></div>
+      <div id="d-ctrls" class="ctrlwrap"></div>
+    </div>
+    <p class="note">Components are listed by Code Name. “AEC?” / “rmlr?” / “elr?” are name-match hints only. Pins are wired to meters/knobs only after they are confirmed.</p>
+  </div>
+</div>
+
+<script src="gain-model.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
