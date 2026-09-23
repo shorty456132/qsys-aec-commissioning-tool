@@ -37,6 +37,19 @@ const ROLES = {
       { key: 'aec.minMic', pin: 'min.mic.level', label: 'Hold If Mic Level Below', lo: -100, hi: 0 },
     ],
   },
+  // S5. Flex Out + Line Out share these pins (CONFIRMED, Core 24f). Dante Tx → "show all" (NEEDS-TEST).
+  output: {
+    id: 'output',
+    label: 'Output',
+    typeMatch: /^io_card_(flex|line)_out/i, // CONFIRMED: io_card_flex_out_core_24f, io_card_line_out_core_24f
+    meters: ({ channel }) => [
+      // NEEDS-TEST: dBFS scale of the live meter (S10); range CONFIRMED −120…+20.
+      { key: 'output.level', pin: `channel.${channel}.digital.output.level`, label: 'Output level', unit: 'dBFS', lo: -120, hi: 20 },
+    ],
+    knobs: ({ channel }) => [
+      { key: 'output.gain', pin: `channel.${channel}.output.gain`, label: 'Output gain', lo: -100, hi: 20 },
+    ],
+  },
 };
 
 // Single-selection stages of a chain, in signal order. `mixer` is the list stage.

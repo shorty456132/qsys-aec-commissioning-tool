@@ -33,54 +33,45 @@ turn and why. The app doesn't write knobs (write-back is parked).
 
 **ADR-07 — ELR vs ERLE.** The AEC has no ELR pin. `channel.N.ERLE` is echo
 return loss *enhancement* → its own card, never labelled ELR. ELR = output
-level − mic echo level, derived once output + input stages are set (S5).
-Until then the card reads "needs a named output component".
+level − mic echo level (`output.level` − `input.level`), derived (S5) only
+when both stages are set **and** the mode is `farend` (ADR-14). Otherwise
+`Snapshot.derived.elr[].needs` says what's missing (stage, mode, live meter).
 
-**ADR-08 — Keepalive.** The Core drops a client that's been idle 60 s (Verified:
-`QRC_Overview.md`). The session sends a `NoOp` every 58 s; a failed NoOp →
-`disconnected` + error. The 500 ms meter poll (ADR-11) also keeps the link
-alive; the timer stays as a backstop.
+**ADR-08 — Keepalive.** The Core drops a client idle 60 s (Verified:
+`QRC_Overview.md`) → `NoOp` every 58 s; a failed NoOp → `disconnected` +
+error. The 500 ms poll (ADR-11) also keeps the link alive; timer = backstop.
 
-**ADR-09 — UI = Setup tab + Monitor tab; v1 UI removed.** The simulator and v1
-markup are deleted from `public/`. `reference/aec-erl-rmlr-emulator-v1.html` stays in
-the repo as a reference only (not served).
+**ADR-09 — UI = Setup tab + Monitor tab; v1 UI removed.**
+`reference/aec-erl-rmlr-emulator-v1.html` stays as a reference (not served).
 
-**ADR-10 — Chain-stage model.** The tech builds a *chain* (one mic path) by
-picking a component + channel per stage: input → mic gain → AEC → automixer →
-mixer crosspoints (1..n) → output. Dropdowns are filtered by each role's
-`typeMatch`. QRC can't reveal wiring, so the chain is the tech's
-statement of it. Persisted to `rig.json` together with field readings. The
-contract allows several chains; the UI starts with one.
+**ADR-10 — Chain-stage model.** A *chain* (one mic path) = a component +
+channel per stage: input → mic gain → AEC → automixer → mixer crosspoints
+(1..n) → output, dropdowns filtered by `typeMatch`. QRC can't reveal wiring,
+so the chain is the tech's statement of it. Saved to `rig.json` with the
+field readings. Contract allows several chains; the UI shows one.
 
-**ADR-11 — Meters via one change group, polled at 500 ms.**
-`ChangeGroup.AddComponentControl` + `ChangeGroup.Poll` (Verified:
-`QRC_Commands.md`). Poll returns **changes only** → the server keeps a value
-cache. Max **4** change groups per connection → we use one, rebuilt with
-`Clear` when the rig changes. Explicit Poll, not AutoPoll, so every
-response is matched by id. CONFIRMED in emulation: the first Poll after
-`AddComponentControl` returns every added pin, so the cache fills without
-`Invalidate`. An unknown component → QRC error 7, shown in the snapshot.
+**ADR-11 — Meters via one change group, polled at 500 ms.** `AddComponentControl`
++ explicit `Poll` (Verified: `QRC_Commands.md`; not AutoPoll, so replies match
+by id). Poll returns changes only → value cache. Max 4 groups/connection → one,
+`Clear` + re-add on a rig change. CONFIRMED: the first Poll returns every pin
+(no `Invalidate`); an unknown component → QRC error 7, shown in the snapshot.
 
 **ADR-12 — Advisor = pure function.** `advise(rig, values, {mode, props}) →
-Finding[]`, server-side, unit-tested. Design properties (`props`, S4) come
-from one `GetComponents` per change-group rebuild and are dropped on
-disconnect, so a rule never uses another design's properties. Every finding carries its trigger value, the
-control(s) to adjust, and `source`: `doc:<file>` or `heuristic`, so the tech
-knows which advice is from Q-SYS guidance and which is our own rule of thumb.
+Finding[]`, server-side, unit-tested. `props` (S4) come from one
+`GetComponents` per rebuild, dropped on disconnect. Every finding carries its
+trigger value, the control(s) to adjust, and `source` (`doc:<file>` |
+`heuristic`) so the tech knows Q-SYS guidance from our rule of thumb.
 
-**ADR-14 — Monitor mode says what the room is doing (S3).** One input meter
-can't tell speech from room noise, and the doc takes them as separate
-measurements (talking vs. quiet). The tech sets the mode on the Monitor tab:
-`off` | `talker` | `quiet` → `advise(rig, values, {mode})`. It's session state
-on the poller (`PUT /api/monitor/mode`), not saved in `rig.json`. Clip and
-peak rules apply in every mode. Rejected: a rolling min/max, because the
-gaps between words aren't the room's noise floor.
+**ADR-14 — Monitor mode says what the room is doing (S3).** One meter can't
+tell speech from noise, so the tech sets `off` | `talker` | `quiet` |
+`farend` (S5: far-end playing, room silent → mic level = echo, ELR readable).
+Session state on the poller (`PUT /api/monitor/mode`), not in `rig.json`.
+Clip/peak rules apply in every mode. Rejected: rolling min/max (word gaps ≠
+noise floor).
 
-**ADR-13 — Emulation doesn't meter.** CONFIRMED 2026-09-22: every meter
-in emulation stays static (RMLR 0, ERLE 0, inputs −120). Emulation is used for
-connect, pin names/types/ranges. Meter logic is built against the fake QRC
-server with scripted meter tracks. Live meter acceptance = S10 (needs a
-Core).
+**ADR-13 — Emulation doesn't meter.** CONFIRMED 2026-09-22: meters stay
+static (RMLR 0, ERLE 0, levels −120). Emulation → connect, pin names/types/
+ranges; meter logic → fake server with scripted tracks; live meters = S10.
 
 ### Superseded
 - ADR-05 Simulator mode stays → replaced by ADR-09 (2026-09-22).
@@ -113,7 +104,7 @@ seconds, e.g. `"0.2"` — and `channel_count`)
 | `min.ref.level` | Float RW | −100…0 dB | "Hold If Ref Level Below" |
 | `min.mic.level` | Float RW | −100…0 dB | "Hold If Mic Level Below" |
 
-Flex input — type `io_card_flex_in_core_8flex` (8 ch; **no** `channel_count` property)
+Flex input — type `io_card_flex_in_core_8flex` / `io_card_flex_in_core_24f` (8 ch; **no** `channel_count` property)
 | Pin | Type / dir | Range | Role |
 |---|---|---|---|
 | `channel.N.digital.input.level` | Float RO | −120…+20 dB | Input level meter (treated as dBFS) |
@@ -121,13 +112,23 @@ Flex input — type `io_card_flex_in_core_8flex` (8 ch; **no** `channel_count` p
 | `channel.N.input.gain` | Float RW | −100…+20 dB | Input gain |
 | `channel.N.clip.hold` | Bool RW | — | Clip hold (unused; Parking Lot) |
 
+Mic/Line In `io_card_mic_line_in_core_24f`: same 4 pins as the Flex (not yet in `input.typeMatch`).
+
+Output (2026-09-23, Core 24f) — `io_card_flex_out_core_24f`, `io_card_line_out_core_24f` (8 ch each, same pins)
+| Pin | Type / dir | Range | Role |
+|---|---|---|---|
+| `channel.N.digital.output.level` | Float RO | −120…+20 dB | Output level meter (treated as dBFS) |
+| `channel.N.output.gain` | Float RW | −100…+20 dB | Output gain |
+
+Types seen, pins not mapped: `mixer` (S6), `auto_mixer_gating_adaptive` (S7),
+`meter2`, `spaq_amplifier` — re-read their controls in their slice.
+
 - `NEEDS-TEST:` RMLR sign convention (does +ve mean ref hotter than mic?) —
   needs a Core with audio.
 - `NEEDS-TEST:` that `digital.input.level` reads dBFS (0 = full scale) on a
   live Core. The input rules assume it does (S10).
-- `NEEDS-TEST:` type strings + pins for Mic/Line In, Dante Rx/Tx, Line Out,
-  Gain, Matrix Mixer crosspoints, Gating Automixer (check each in emulation
-  in its own slice).
+- `NEEDS-TEST:` pins for Matrix Mixer crosspoints, Gating Automixer, Gain;
+  type + pins for Dante Rx/Tx (check each in emulation in its own slice).
 
 ### Advisor thresholds (sources for ADR-12)
 | Rule | Threshold | Source |
@@ -147,12 +148,13 @@ Flex input — type `io_card_flex_in_core_8flex` (8 ch; **no** `channel_count` p
 ---
 
 ## Resume notes
-1. The v2 plan is in TASKS.md. S1–S4 are done → next is **S5** (S6–S9 also
+1. The v2 plan is in TASKS.md. S1–S5 are done → next is **S6** (S7–S9 also
    only need S2). The contracts at the top of TASKS are fixed; change them only
    by editing both files.
-2. `npm test` is 105 green after S4. The Setup stage editor in `app.js` is
+2. `npm test` is 120 green after S5. The Setup stage editor in `app.js` is
    generic: add a role id to `STAGE_ROLES` + a `data-role` row in the HTML. Tests pass `rigPath` (and `pollMs: 30`) to
    `createApp` so they never touch the repo's `rig.json`. A new metered role
    only needs `roles.js` `meters()` — `meterList` + the poller pick it up.
-3. Emulation: `127.0.0.1:1710`, design = `200ms_Acoustic_Echo_Canceler` +
-   `Flex_In_Core-1`. Server: `npm start` (`node src/server.js`) (:8080; `PORT=` to override).
+3. Emulation: `127.0.0.1:1710`, Core 24f design = `200ms_Acoustic_Echo_Canceler`,
+   `Mic/Line_In_Core-1`, `Flex_In_Core-1`, `Flex_Out_Core-1`, `Line_Out_Core-1`,
+   `Mixer_8x8`, `Gating_Automatic_Mic_Mixer`, meter, SPA-Qf amp. Server: `npm start` (`node src/server.js`) (:8080; `PORT=` to override).

@@ -66,6 +66,26 @@ test('input role: knobs → channel.N.input.gain −100…+20 (CONFIRMED)', () =
   assert.deepStrictEqual(k.map((x) => [x.key, x.pin, x.lo, x.hi]), [['input.gain', 'channel.2.input.gain', -100, 20]]);
 });
 
+test('output role: typeMatch accepts the CONFIRMED Flex Out + Line Out types, rejects others', () => {
+  const r = ROLES.output;
+  assert.ok(r.typeMatch.test('io_card_flex_out_core_24f'));
+  assert.ok(r.typeMatch.test('io_card_line_out_core_24f'));
+  assert.ok(!r.typeMatch.test('io_card_flex_in_core_24f'));
+  assert.ok(!r.typeMatch.test('spaq_amplifier'));
+  assert.ok(!r.typeMatch.test('meter2'));
+});
+
+test('output role: meters({channel:2}) → digital output level (dBFS) (CONFIRMED)', () => {
+  const m = ROLES.output.meters({ component: 'X', channel: 2 });
+  assert.deepStrictEqual(m.map((x) => [x.key, x.pin, x.unit, x.lo, x.hi]),
+    [['output.level', 'channel.2.digital.output.level', 'dBFS', -120, 20]]);
+});
+
+test('output role: knobs → channel.N.output.gain −100…+20 (CONFIRMED)', () => {
+  const k = ROLES.output.knobs({ component: 'X', channel: 4 });
+  assert.deepStrictEqual(k.map((x) => [x.key, x.pin, x.lo, x.hi]), [['output.gain', 'channel.4.output.gain', -100, 20]]);
+});
+
 test('defaultRig → one empty chain, empty field', () => {
   const r = defaultRig();
   assert.strictEqual(r.chains.length, 1);

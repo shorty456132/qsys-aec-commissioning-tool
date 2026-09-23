@@ -41,9 +41,11 @@ Role = { id, label, typeMatch: RegExp,         // dropdown filter; "show all" fa
 
 // Monitor snapshot — GET /api/monitor, short-polled by the UI (ADR-11)
 Snapshot = { t, state, error: string|null,       // poll/rebuild/rig error (S2)
-             mode: 'off'|'talker'|'quiet',      // S3 — PUT /api/monitor/mode {mode}
+             mode: 'off'|'talker'|'quiet'|'farend', // S3/S5 — PUT /api/monitor/mode {mode}
              meters: [{ key, chain, role, component, pin, label,
-             value, string, unit, lo, hi, stale }], findings: [Finding] }
+             value, string, unit, lo, hi, stale }],
+             derived: { elr: [{ chain, value: number|null, needs: string|null }] }, // S5
+             findings: [Finding] }
 
 // Finding — advisor.js, pure: advise(rig, meterValues, {mode, props}) -> [Finding] (ADR-12)
 //   props (S4) = { [component]: { [property]: string } } from GetComponents on
@@ -57,15 +59,6 @@ Finding = { id, level: 'ok'|'warn'|'bad', text,
 ---
 
 ## To Do
-
-**S5 — Output stage + derived ELR** *(needs S2)*
-Role (line out / Dante out) + output level meter; near-clip rule (> −3
-dBFS); the ELR card becomes output level − mic echo level (ADR-07) once both
-stages are set.
-Tests first: ELR math; ELR < 6 dB → warn; one stage missing → the card keeps
-the "needs …" text. `NEEDS-TEST:` output type strings + pins (emulation).
-Also: fill the S4 seat-SPL finding's `adjust` with the output level knob
-(today it names "amplifier gain or output level" in text only).
 
 **S6 — Mixer crosspoints (monitor 1..n)** *(needs S2)*
 Mixer dropdown → an in × out picker; add or remove several crosspoints;
@@ -97,6 +90,13 @@ live ranges).
 - (none)
 
 ## Done
+- **S5 — Output stage + derived ELR.** `output` role
+  (`/^io_card_(flex|line)_out/i`; `output.level`, knob `output.gain`). New
+  Monitor mode **Far-end test** → `derived.elr` = output level − mic input
+  level (ADR-07), else "needs …" (stage / mode / meter). ELR < 6 warn
+  (heuristic); output > −3 dBFS warn (any mode); the seat-SPL low/high finding
+  names the output gain. Emulation acceptance passed (API, Core 24f).
+  `NEEDS-TEST:` Dante Tx type/pins → "show all".
 - **S4 — Field readings.** Setup panel: seat SPL list (dBA), noise floor
   (dB SPL), RT60 (s); `validateField` (SPL/noise 0…140, RT60 (0, 20] s,
   ≤ 32 seats, empty ok). Rules: seat SPL 65…70 (low → raise, high → lower,
@@ -138,8 +138,13 @@ live ranges).
 - Input "no signal" rule: talker mode at ≈ −120 dBFS currently says "raise
   input gain"; a dead input should say check mic / phantom / mute instead
   (seen in S3 emulation acceptance)
-- Input rule for Mic/Line In + Dante Rx once their pins are CONFIRMED (add a
-  component with each to the emulation design)
+- Input rule for Mic/Line In + Dante Rx. Mic/Line In is now in the design
+  (`io_card_mic_line_in_core_24f`) with the same level/clip/gain pins as the
+  Flex → widening `input.typeMatch` is likely a one-liner + test. Dante Rx
+  still unseen.
+- ELR on silent meters: far-end mode with both meters at −120 gives ELR 0 →
+  warn. Should say "no signal — play far-end audio" (seen in S5 acceptance;
+  same family as the input "no signal" item)
 - Clip latch: a 500 ms poll can miss a short clip; `channel.N.clip.hold` (RW
   Bool) exists on the Flex
 
@@ -170,3 +175,7 @@ live ranges).
   is a string in seconds ("0.2"). `advise` gained `{props}` (contract updated)
   — the poller fetches `GetComponents` on rebuild, so there's no new Rig field. SNR uses the
   quietest seat. Field findings show offline; the tail rule shows only while connected.
+- **2026-09-23 (S5):** done, `npm test` 120 green. Emulation design is now a
+  Core 24f + Mic/Line In, Flex In/Out, Line Out, SPA-Qf amp, meter2, 8×8
+  mixer, gating automixer (types in ADR §Pins, ready for S6–S8). Flex Out and
+  Line Out share pins. ELR needs a tech-set `farend` mode (contract updated).
